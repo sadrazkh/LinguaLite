@@ -1,82 +1,91 @@
 # LinguaLite
 
-مینی‌اپ تلگرام برای یادگیری زبان با سیستم مرور شبیه لایتنر.
+مینی‌اپ تلگرام برای یادگیری زبان با لایتنر، دیتای جدا برای هر کاربر، و تکمیل خودکار کارت با OpenRouter.
 
-## اجرا در لوکال
+## اجرای لوکال
 
 ```powershell
 dotnet run
 ```
 
-برای باز کردن پروژه در Visual Studio یا Rider از فایل `LinguaLite.sln` استفاده کنید.
+برای باز کردن پروژه از `LinguaLite.sln` استفاده کنید.
 
-## Deploy روی CapRover
+## CapRover
 
-این پروژه برای CapRover آماده شده و این فایل‌ها را دارد:
+این فایل‌ها باید در ریشه پروژه باشند:
 
 - `captain-definition`
 - `Dockerfile`
 - `.dockerignore`
 
-### تنظیمات ضروری CapRover
-
-در اپ `lingua-lite` این موارد را تنظیم کنید:
-
-1. در بخش **HTTP Settings** گزینه **Enable HTTPS** را فعال کنید.
-2. در بخش **App Configs > Environmental Variables** این مقدار را اضافه کنید:
+در CapRover برای اپ `lingua-lite` این envها را بگذارید:
 
 ```text
 DATA_DIR=/data
+TELEGRAM_BOT_TOKEN=توکن_بات_تلگرام
 ```
 
-3. در بخش **Persistent Directories / Volumes** یک volume اضافه کنید:
+`OPENROUTER_API_KEY` اختیاری است. اگر آن را نگذاری، هر کاربر می‌تواند API key خودش را در بخش تنظیمات اپ وارد کند.
+
+```text
+OPENROUTER_API_KEY=sk-or-v1-...
+```
+
+Volume پایدار:
 
 ```text
 Path in App: /data
 Label: lingua-lite-data
 ```
 
-با این کار فایل دیتای برنامه در مسیر `/data/deck.json` ذخیره می‌شود و با هر redeploy پاک نمی‌شود.
+دیتای هر کاربر جدا ذخیره می‌شود:
 
-### Deploy
+```text
+/data/users/tg_TELEGRAM_USER_ID/deck.json
+```
 
-کل پوشه پروژه را از ریشه‌ای که فایل `captain-definition` داخل آن است deploy کنید:
+اگر `TELEGRAM_BOT_TOKEN` تنظیم باشد، API فقط `initData` معتبر تلگرام را قبول می‌کند.
+
+## Deploy
+
+با CLI:
 
 ```powershell
 caprover deploy
 ```
 
-یا اگر از داشبورد CapRover استفاده می‌کنید، همین پوشه را zip کنید و آپلود کنید. فایل `captain-definition` باید در ریشه zip باشد، نه داخل یک پوشه اضافی.
+یا از داشبورد CapRover همین پوشه را zip کنید. دقت کنید `captain-definition` باید در ریشه zip باشد، نه داخل یک فولدر اضافه.
 
-## ذخیره‌سازی
+## اتصال تلگرام
 
-فعلا ذخیره‌سازی با فایل JSON انجام می‌شود تا MVP سریع و کم‌هزینه بالا بیاید.
+در `@BotFather`:
 
-- لوکال: `App_Data/deck.json`
-- CapRover: `/data/deck.json`
+1. `/mybots`
+2. انتخاب بات
+3. `Bot Settings`
+4. `Configure Mini App`
+5. `Enable Mini App`
+6. آدرس HTTPS اپ را بدهید.
 
-برای نسخه چندکاربره واقعی باید مرحله بعدی این باشد:
-
-- اعتبارسنجی `Telegram.WebApp.initData`
-- ذخیره کارت‌ها بر اساس Telegram user id
-- مهاجرت از JSON به SQLite یا PostgreSQL
-
-برای شروع روی CapRover، همین JSON همراه با volume کافی است. اگر اپ عمومی و چندکاربره شود، PostgreSQL گزینه بهتر است.
-
-## اتصال به تلگرام
-
-بعد از Deploy، دامنه HTTPS اپ را در BotFather ثبت کنید:
-
-1. بروید به `@BotFather`
-2. `/mybots`
-3. انتخاب بات
-4. `Bot Settings`
-5. `Configure Mini App`
-6. `Enable Mini App`
-7. آدرس HTTPS اپ، مثلا:
+برای دکمه پایین چت:
 
 ```text
-https://lingua-lite.your-domain.com
+/setmenubutton
 ```
 
-برای دکمه پایین چت هم از `/setmenubutton` در BotFather استفاده کنید و همان URL را بدهید.
+## OpenRouter
+
+در بخش تنظیمات اپ:
+
+- `OpenRouter API Key`
+- `Model`
+
+مدل پیش‌فرض رایگان:
+
+```text
+google/gemma-4-31b-it:free
+```
+
+این مدل رایگان، instruction-tuned و text-to-text است و طبق لیست مدل‌های OpenRouter از `response_format` پشتیبانی می‌کند؛ برای ساخت JSON تمیز کارت لغت از مدل‌های رایگان تخصصی code یا safety مناسب‌تر است.
+
+بعد در بخش افزودن، فقط کلمه یا عبارت را بنویسید و دکمه `پر کن` را بزنید تا فیلدهای کارت کامل شوند.

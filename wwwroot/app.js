@@ -2,15 +2,25 @@ const tg = window.Telegram?.WebApp;
 tg?.ready();
 tg?.expand();
 
-if (tg?.themeParams) {
-  const root = document.documentElement;
-  const theme = tg.themeParams;
-  if (theme.bg_color) root.style.setProperty("--bg", theme.bg_color);
-  if (theme.text_color) root.style.setProperty("--text", theme.text_color);
-  if (theme.hint_color) root.style.setProperty("--muted", theme.hint_color);
-  if (theme.button_color) root.style.setProperty("--primary", theme.button_color);
-  if (theme.secondary_bg_color) root.style.setProperty("--surface-soft", theme.secondary_bg_color);
-}
+const defaultModel = "google/gemma-4-31b-it:free";
+const storage = {
+  apiKey: "lingualite.openrouterApiKey",
+  model: "lingualite.model",
+  devUserId: "lingualite.devUserId"
+};
+
+const defaultPrompt = `You generate flashcard data for Persian-speaking English learners.
+Return JSON fields: front, back, example, prompt, answer, notes, type.
+front = exact English item
+back = Persian meaning
+example = natural English sentence
+prompt = recall/use question
+answer = ideal short answer
+notes = Persian usage notes`;
+
+const devUserId = getOrCreateDevUserId();
+
+applyTelegramTheme();
 
 const state = {
   due: [],
@@ -39,7 +49,19 @@ const elements = {
   form: document.querySelector("#cardForm"),
   boxes: document.querySelector("#boxes"),
   deckList: document.querySelector("#deckList"),
-  toast: document.querySelector("#toast")
+  toast: document.querySelector("#toast"),
+  aiWordInput: document.querySelector("#aiWordInput"),
+  completeAiButton: document.querySelector("#completeAiButton"),
+  settingsForm: document.querySelector("#settingsForm"),
+  apiKeyInput: document.querySelector("#apiKeyInput"),
+  modelInput: document.querySelector("#modelInput"),
+  promptTemplate: document.querySelector("#promptTemplate"),
+  frontInput: document.querySelector("#frontInput"),
+  backInput: document.querySelector("#backInput"),
+  exampleInput: document.querySelector("#exampleInput"),
+  promptInput: document.querySelector("#promptInput"),
+  answerInput: document.querySelector("#answerInput"),
+  notesInput: document.querySelector("#notesInput")
 };
 
 const typeLabels = {
@@ -62,8 +84,28 @@ elements.rememberedButton.addEventListener("click", () => reviewCurrent(true));
 elements.forgotButton.addEventListener("click", () => reviewCurrent(false));
 elements.refreshButton.addEventListener("click", loadAll);
 elements.form.addEventListener("submit", createCard);
+elements.completeAiButton.addEventListener("click", completeWithAi);
+elements.settingsForm.addEventListener("submit", saveSettings);
 
+loadSettings();
 loadAll();
+
+function applyTelegramTheme() {
+  const root = document.documentElement;
+  const colorScheme = tg?.colorScheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  root.dataset.theme = colorScheme === "dark" ? "dark" : "light";
+
+  const theme = tg?.themeParams;
+  if (!theme) return;
+
+  if (theme.bg_color) root.style.setProperty("--bg", theme.bg_color);
+  if (theme.secondary_bg_color) root.style.setProperty("--surface", theme.secondary_bg_color);
+  if (theme.section_bg_color) root.style.setProperty("--surface-2", theme.section_bg_color);
+  if (theme.text_color) root.style.setProperty("--text", theme.text_color);
+  if (theme.hint_color) root.style.setProperty("--muted", theme.hint_color);
+  if (theme.button_color) root.style.setProperty("--primary", theme.button_color);
+  if (theme.button_text_color) root.style.setProperty("--primary-text", theme.button_text_color);
+}
 
 async function loadAll() {
   try {
@@ -80,7 +122,7 @@ async function loadAll() {
     renderDeck(cards);
     pickNextCard();
   } catch (error) {
-    showToast(error.message || "مشکلی در دریافت اطلاعات پیش آمد.");
+    showToast(error.message || "دریافت اطلاعات انجام نشد.");
   }
 }
 
@@ -134,12 +176,11 @@ async function reviewCurrent(remembered) {
   try {
     await fetchJson(`/api/cards/${state.current.id}/review`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ remembered })
     });
 
     tg?.HapticFeedback?.notificationOccurred(remembered ? "success" : "warning");
-    showToast(remembered ? "عالی، رفت جعبه بعدی." : "اشکالی ندارد، دوباره مرور می‌شود.");
+    showToast(remembered ? "رفت جعبه بعدی." : "برای مرور دوباره برگشت.");
     await refreshSummaryOnly();
     pickNextCard();
   } catch (error) {
@@ -149,24 +190,81 @@ async function reviewCurrent(remembered) {
 
 async function createCard(event) {
   event.preventDefault();
-  const formData = new FormData(elements.form);
-  const payload = Object.fromEntries(formData.entries());
+  const payload = Object.fromEntries(new FormData(elements.form).entries());
 
   try {
     await fetchJson("/api/cards", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
 
     elements.form.reset();
-    showToast("کارت جدید اضافه شد.");
+    showToast("کارت به لایتنر خودت اضافه شد.");
     tg?.HapticFeedback?.notificationOccurred("success");
     await loadAll();
     switchView("review");
   } catch (error) {
     showToast(error.message || "کارت ذخیره نشد.");
   }
+}
+
+async function completeWithAi() {
+  const word = elements.aiWordInput.value.trim() || elements.frontInput.value.trim();
+  if (!word) {
+    showToast("اول کلمه یا عبارت را وارد کن.");
+    return;
+  }
+
+  elements.completeAiButton.disabled = true;
+  elements.completeAiButton.textContent = "در حال تکمیل...";
+
+  try {
+    const apiKey = localStorage.getItem(storage.apiKey) || "";
+    const headers = apiKey ? { "X-OpenRouter-Api-Key": apiKey } : {};
+    const card = await fetchJson("/api/ai/complete", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        word,
+        model: localStorage.getItem(storage.model) || defaultModel
+      })
+    });
+
+    fillCardForm(card);
+    showToast("فیلدهای کارت پر شد.");
+    tg?.HapticFeedback?.notificationOccurred("success");
+  } catch (error) {
+    showToast(error.message || "تکمیل با OpenRouter انجام نشد.");
+  } finally {
+    elements.completeAiButton.disabled = false;
+    elements.completeAiButton.textContent = "پر کن";
+  }
+}
+
+function fillCardForm(card) {
+  elements.frontInput.value = card.front || "";
+  elements.backInput.value = card.back || "";
+  elements.exampleInput.value = card.example || "";
+  elements.promptInput.value = card.prompt || "";
+  elements.answerInput.value = card.answer || "";
+  elements.notesInput.value = card.notes || "";
+
+  const type = card.type || "Word";
+  const radio = document.querySelector(`input[name="type"][value="${type}"]`);
+  if (radio) radio.checked = true;
+}
+
+function loadSettings() {
+  elements.apiKeyInput.value = localStorage.getItem(storage.apiKey) || "";
+  elements.modelInput.value = localStorage.getItem(storage.model) || defaultModel;
+  elements.promptTemplate.value = defaultPrompt;
+}
+
+function saveSettings(event) {
+  event.preventDefault();
+  localStorage.setItem(storage.apiKey, elements.apiKeyInput.value.trim());
+  localStorage.setItem(storage.model, elements.modelInput.value.trim() || defaultModel);
+  showToast("تنظیمات ذخیره شد.");
 }
 
 async function refreshSummaryOnly() {
@@ -215,8 +313,16 @@ function renderDeck(cards) {
   }
 }
 
-async function fetchJson(url, options) {
-  const response = await fetch(url, options);
+async function fetchJson(url, options = {}) {
+  const headers = new Headers(options.headers || {});
+  headers.set("Content-Type", "application/json");
+  headers.set("X-Dev-User-Id", devUserId);
+
+  if (tg?.initData) {
+    headers.set("X-Telegram-Init-Data", tg.initData);
+  }
+
+  const response = await fetch(url, { ...options, headers });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.message || "درخواست ناموفق بود.");
@@ -226,11 +332,20 @@ async function fetchJson(url, options) {
   return response.json();
 }
 
+function getOrCreateDevUserId() {
+  const existing = localStorage.getItem(storage.devUserId);
+  if (existing) return existing;
+
+  const created = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  localStorage.setItem(storage.devUserId, created);
+  return created;
+}
+
 function showToast(message) {
   elements.toast.textContent = message;
   elements.toast.classList.add("show");
   clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => elements.toast.classList.remove("show"), 2400);
+  showToast.timer = setTimeout(() => elements.toast.classList.remove("show"), 2600);
 }
 
 function toPersianNumber(value) {
