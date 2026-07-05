@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>LinguaLite</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <main class="app-shell">
+    <section class="hero">
+      <div class="brand-mark" aria-hidden="true">L</div>
+      <div class="hero-copy">
+        <p class="eyebrow">LinguaLite</p>
+        <h1>تمرین روزانه زبان</h1>
+        <span>لغت، جمله و پرسش را با مرور زمان‌بندی‌شده نگه دار.</span>
+      </div>
+      <button class="icon-button" id="refreshButton" type="button" aria-label="تازه‌سازی">
+        <span aria-hidden="true">↻</span>
+      </button>
+    </section>
+
+    <section class="stats-grid" aria-label="آمار یادگیری">
+      <article class="stat stat-primary">
+        <small>آماده مرور</small>
+        <span id="dueCards">0</span>
+      </article>
+      <article class="stat">
+        <small>کل کارت‌ها</small>
+        <span id="totalCards">0</span>
+      </article>
+      <article class="stat">
+        <small>دقت</small>
+        <span id="accuracy">0%</span>
+      </article>
+    </section>
+
+    <nav class="tabs" aria-label="بخش‌ها">
+      <button class="tab active" data-view="review" type="button">
+        <span aria-hidden="true">□</span>
+        مرور
+      </button>
+      <button class="tab" data-view="add" type="button">
+        <span aria-hidden="true">＋</span>
+        افزودن
+      </button>
+      <button class="tab" data-view="deck" type="button">
+        <span aria-hidden="true">≡</span>
+        کارت‌ها
+      </button>
+    </nav>
+
+    <section class="view active" id="reviewView">
+      <div class="review-card" id="reviewCard">
+        <div class="card-head">
+          <div class="card-meta">
+            <span id="cardType">لغت</span>
+            <span id="boxLabel">جعبه ۱</span>
+          </div>
+          <div class="box-progress" id="boxProgress" aria-label="جایگاه کارت در لایتنر">
+            <i></i><i></i><i></i><i></i><i></i>
+          </div>
+        </div>
+
+        <div class="flash-area">
+          <p class="flash-label">روی کارت</p>
+          <div class="prompt" id="frontText">در حال آماده‌سازی...</div>
+          <div class="example" id="exampleText"></div>
+        </div>
+
+        <button class="primary-button" id="revealButton" type="button">نمایش جواب</button>
+
+        <div class="answer-panel" id="answerPanel" hidden>
+          <p class="answer-label">پشت کارت</p>
+          <p id="backText"></p>
+          <p id="qaText"></p>
+          <div class="review-actions">
+            <button class="ghost-button danger" id="forgotButton" type="button">یادم نبود</button>
+            <button class="ghost-button success" id="rememberedButton" type="button">بلد بودم</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="empty-state" id="emptyState" hidden>
+        <strong>فعلا چیزی برای مرور نداری.</strong>
+        <span>یک کارت تازه اضافه کن یا کمی بعد برگرد.</span>
+      </div>
+    </section>
+
+    <section class="view" id="addView">
+      <form class="card-form" id="cardForm">
+        <header class="section-title">
+          <strong>کارت جدید</strong>
+          <span>برای لغت، جمله یا تمرین پرسش و پاسخ</span>
+        </header>
+
+        <div class="segmented" role="group" aria-label="نوع کارت">
+          <label><input type="radio" name="type" value="Word" checked> لغت</label>
+          <label><input type="radio" name="type" value="Sentence"> جمله</label>
+          <label><input type="radio" name="type" value="Question"> پرسش</label>
+        </div>
+
+        <label>
+          <span>روی کارت</span>
+          <input id="frontInput" name="front" autocomplete="off" placeholder="مثلا: inevitable" required>
+        </label>
+        <label>
+          <span>پشت کارت / معنی</span>
+          <textarea id="backInput" name="back" rows="3" placeholder="مثلا: اجتناب‌ناپذیر" required></textarea>
+        </label>
+        <label>
+          <span>جمله نمونه</span>
+          <textarea id="exampleInput" name="example" rows="2" placeholder="It was an inevitable decision."></textarea>
+        </label>
+        <label>
+          <span>سؤال تمرینی</span>
+          <input id="promptInput" name="prompt" autocomplete="off" placeholder="When do we use this word?">
+        </label>
+        <label>
+          <span>جواب پیشنهادی</span>
+          <input id="answerInput" name="answer" autocomplete="off" placeholder="When something cannot be avoided.">
+        </label>
+        <label>
+          <span>یادداشت</span>
+          <input id="notesInput" name="notes" autocomplete="off" placeholder="رسمی، کاربردی در writing">
+        </label>
+        <button class="primary-button" type="submit">افزودن به لایتنر</button>
+      </form>
+    </section>
+
+    <section class="view" id="deckView">
+      <header class="section-title deck-title">
+        <strong>جعبه‌های لایتنر</strong>
+        <span>هرچه کارت جلوتر برود، فاصله مرور بیشتر می‌شود.</span>
+      </header>
+      <div class="boxes" id="boxes"></div>
+      <div class="deck-list" id="deckList"></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

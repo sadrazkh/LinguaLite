@@ -1,0 +1,10 @@
+bin/
+obj/
+App_Data/
+publish/
+.git/
+.vs/
+.idea/
+*.user
+*.suo
+*.zip
