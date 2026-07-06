@@ -8,11 +8,6 @@ const storage = {
   devUserId: "lingualite.devUserId"
 };
 
-const defaultPrompt = `Feedback cards:
-Input: "I programmer"
-Output should teach: "I am a programmer"
-Explain why "am" and article "a" are needed.`;
-
 const devUserId = getOrCreateDevUserId();
 const state = { due: [], current: null, config: null };
 
@@ -26,6 +21,8 @@ const elements = {
   cardType: $("#cardType"),
   boxLabel: $("#boxLabel"),
   boxProgress: $("#boxProgress"),
+  frontCaption: $("#frontCaption"),
+  backCaption: $("#backCaption"),
   frontText: $("#frontText"),
   exampleText: $("#exampleText"),
   backText: $("#backText"),
@@ -41,14 +38,25 @@ const elements = {
   boxes: $("#boxes"),
   deckList: $("#deckList"),
   toast: $("#toast"),
+  aiPanel: $("#aiPanel"),
+  aiPanelTitle: $("#aiPanelTitle"),
+  aiPanelHint: $("#aiPanelHint"),
   aiWordInput: $("#aiWordInput"),
   completeAiButton: $("#completeAiButton"),
+  typeHelper: $("#typeHelper"),
+  feedbackGuide: $("#feedbackGuide"),
   settingsForm: $("#settingsForm"),
   apiKeyInput: $("#apiKeyInput"),
   redeemCodeInput: $("#redeemCodeInput"),
   redeemCodeButton: $("#redeemCodeButton"),
   exportButton: $("#exportButton"),
   importFileInput: $("#importFileInput"),
+  frontLabel: $("#frontLabel"),
+  backLabel: $("#backLabel"),
+  exampleLabel: $("#exampleLabel"),
+  promptLabel: $("#promptLabel"),
+  answerLabel: $("#answerLabel"),
+  notesLabel: $("#notesLabel"),
   frontInput: $("#frontInput"),
   backInput: $("#backInput"),
   exampleInput: $("#exampleInput"),
@@ -72,14 +80,74 @@ const typeLabels = {
   Feedback: "فیدبک"
 };
 
+const typeCopy = {
+  Word: {
+    title: "تکمیل لغت با OpenRouter",
+    helper: "برای لغت، AI معنی فارسی، مثال طبیعی، سوال مرور و نکته کاربردی می‌سازد.",
+    aiHint: "یک کلمه یا عبارت کوتاه بنویس؛ بقیه فیلدهای کارت پر می‌شود.",
+    aiPlaceholder: "مثلا: ancestor",
+    front: "لغت / عبارت",
+    back: "معنی و توضیح فارسی",
+    example: "مثال انگلیسی",
+    prompt: "سوال یادآوری",
+    answer: "جواب کوتاه",
+    notes: "نکته کاربردی",
+    placeholders: ["ancestor", "جد، نیا", "My ancestors lived near the sea.", "What does ancestor mean?", "جد یا نیا", "معمولا درباره خانواده و نسل‌های قبلی استفاده می‌شود."]
+  },
+  Sentence: {
+    title: "تکمیل جمله با OpenRouter",
+    helper: "برای جمله، AI معنی، ساختار و تمرین بازسازی جمله را آماده می‌کند.",
+    aiHint: "یک جمله انگلیسی بده تا کارت جمله‌محور بسازد.",
+    aiPlaceholder: "مثلا: I have been learning English for two years.",
+    front: "جمله",
+    back: "معنی و نکته ساختاری",
+    example: "مثال مشابه",
+    prompt: "تمرین بازسازی",
+    answer: "جواب درست",
+    notes: "نکته گرامری",
+    placeholders: ["I have been learning English.", "من دارم انگلیسی یاد می‌گیرم.", "She has been working all day.", "Translate: من دو سال است انگلیسی می‌خوانم.", "I have been learning English for two years.", "برای کاری که از گذشته شروع شده و هنوز ادامه دارد."]
+  },
+  Question: {
+    title: "ساخت کارت پرسشی با OpenRouter",
+    helper: "برای پرسش، AI سوال، جواب نمونه و نکته مکالمه‌ای می‌سازد.",
+    aiHint: "موضوع یا سوال را بنویس تا کارت پرسش و پاسخ آماده شود.",
+    aiPlaceholder: "مثلا: how to ask about someone's job",
+    front: "سوال",
+    back: "توضیح فارسی",
+    example: "نمونه مکالمه",
+    prompt: "پرسش تمرینی",
+    answer: "جواب نمونه",
+    notes: "نکته مکالمه",
+    placeholders: ["What do you do?", "برای پرسیدن شغل طرف مقابل.", "A: What do you do? B: I am a programmer.", "Answer naturally: What do you do?", "I am a programmer.", "در مکالمه روزمره از What is your job? طبیعی‌تر است."]
+  },
+  Feedback: {
+    title: "ساخت کارت فیدبک با OpenRouter",
+    helper: "فیدبک یعنی اشتباه واقعی خودت را تبدیل به کارت مرور کنی؛ دستور AI اینجا مخصوص اصلاح اشتباه است.",
+    aiHint: "اشتباه، اصلاح استاد یا جمله غلط را بنویس؛ AI دلیل، الگو و تمرین اصلاح می‌سازد.",
+    aiPlaceholder: "مثلا: I programmer / استاد گفت: I am a programmer",
+    front: "اشتباه → اصلاح درست",
+    back: "دلیل اصلاح به فارسی",
+    example: "مثال درست",
+    prompt: "تمرین اصلاح",
+    answer: "جواب صحیح",
+    notes: "الگو و هشدار",
+    placeholders: ["wrong: I programmer → correct: I am a programmer", "در جمله انگلیسی برای معرفی شغل باید فعل be و حرف تعریف a بیاید.", "I am a programmer.", "Correct this sentence: I programmer.", "I am a programmer.", "الگو: I am a/an + job. نگوییم I programmer."]
+  }
+};
+
 applyTelegramTheme();
 bindEvents();
 loadSettings();
+updateCardMode();
 loadAll();
 
 function bindEvents() {
   document.querySelectorAll(".tab").forEach((tab) => {
     tab.addEventListener("click", () => switchView(tab.dataset.view));
+  });
+
+  document.querySelectorAll('input[name="type"]').forEach((radio) => {
+    radio.addEventListener("change", updateCardMode);
   });
 
   elements.revealButton.addEventListener("click", () => {
@@ -106,15 +174,10 @@ function applyTelegramTheme() {
   const colorScheme = tg?.colorScheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   root.dataset.theme = colorScheme === "dark" ? "dark" : "light";
 
-  const theme = tg?.themeParams;
-  if (!theme) return;
-  if (theme.bg_color) root.style.setProperty("--bg", theme.bg_color);
-  if (theme.secondary_bg_color) root.style.setProperty("--surface", theme.secondary_bg_color);
-  if (theme.section_bg_color) root.style.setProperty("--surface-2", theme.section_bg_color);
-  if (theme.text_color) root.style.setProperty("--text", theme.text_color);
-  if (theme.hint_color) root.style.setProperty("--muted", theme.hint_color);
-  if (theme.button_color) root.style.setProperty("--primary", theme.button_color);
-  if (theme.button_text_color) root.style.setProperty("--primary-text", theme.button_text_color);
+  const buttonColor = tg?.themeParams?.button_color;
+  const buttonTextColor = tg?.themeParams?.button_text_color;
+  if (buttonColor) root.style.setProperty("--primary", buttonColor);
+  if (buttonTextColor) root.style.setProperty("--primary-text", buttonTextColor);
 }
 
 async function loadAll() {
@@ -172,10 +235,14 @@ function pickNextCard() {
   }
 
   const card = state.current;
+  const isFeedback = card.type === "Feedback";
   elements.reviewCard.hidden = false;
   elements.emptyState.hidden = true;
+  elements.reviewCard.classList.toggle("feedback-review", isFeedback);
   elements.cardType.textContent = typeLabels[card.type] ?? "کارت";
   elements.boxLabel.textContent = `جعبه ${toPersianNumber(card.box)}`;
+  elements.frontCaption.textContent = isFeedback ? "اشتباه و اصلاح" : "روی کارت";
+  elements.backCaption.textContent = isFeedback ? "دلیل و الگو" : "پشت کارت";
   elements.frontText.textContent = card.front;
   elements.exampleText.textContent = card.example || card.prompt || "";
   elements.backText.textContent = card.back;
@@ -203,6 +270,7 @@ async function createCard(event) {
   try {
     await fetchJson("/api/cards", { method: "POST", body: JSON.stringify(payload) });
     elements.form.reset();
+    updateCardMode();
     showToast("کارت اضافه شد.");
     await loadAll();
     switchView("review");
@@ -212,10 +280,10 @@ async function createCard(event) {
 }
 
 async function completeWithAi() {
+  const type = getSelectedType();
   const text = elements.aiWordInput.value.trim() || elements.frontInput.value.trim();
-  const type = document.querySelector('input[name="type"]:checked')?.value || "Word";
   if (!text) {
-    showToast("اول متن کارت یا فیدبک را وارد کن.");
+    showToast(type === "Feedback" ? "اول اشتباه یا فیدبک استاد را بنویس." : "اول متن کارت را وارد کن.");
     return;
   }
 
@@ -230,7 +298,7 @@ async function completeWithAi() {
       body: JSON.stringify({ text, type })
     });
     fillCardForm(card);
-    showToast("فیلدهای کارت پر شد.");
+    showToast(type === "Feedback" ? "کارت فیدبک آماده شد." : "فیلدهای کارت پر شد.");
   } catch (error) {
     showToast(error.message || "تکمیل با OpenRouter انجام نشد.");
   } finally {
@@ -248,6 +316,37 @@ function fillCardForm(card) {
   elements.notesInput.value = card.notes || "";
   const radio = document.querySelector(`input[name="type"][value="${card.type || "Word"}"]`);
   if (radio) radio.checked = true;
+  updateCardMode();
+}
+
+function updateCardMode() {
+  const type = getSelectedType();
+  const copy = typeCopy[type] || typeCopy.Word;
+  const placeholders = copy.placeholders;
+  const isFeedback = type === "Feedback";
+
+  document.body.classList.toggle("feedback-mode", isFeedback);
+  elements.aiPanelTitle.textContent = copy.title;
+  elements.typeHelper.textContent = copy.helper;
+  elements.aiPanelHint.textContent = copy.aiHint;
+  elements.aiWordInput.placeholder = copy.aiPlaceholder;
+  elements.feedbackGuide.hidden = !isFeedback;
+  elements.frontLabel.textContent = copy.front;
+  elements.backLabel.textContent = copy.back;
+  elements.exampleLabel.textContent = copy.example;
+  elements.promptLabel.textContent = copy.prompt;
+  elements.answerLabel.textContent = copy.answer;
+  elements.notesLabel.textContent = copy.notes;
+  elements.frontInput.placeholder = placeholders[0];
+  elements.backInput.placeholder = placeholders[1];
+  elements.exampleInput.placeholder = placeholders[2];
+  elements.promptInput.placeholder = placeholders[3];
+  elements.answerInput.placeholder = placeholders[4];
+  elements.notesInput.placeholder = placeholders[5];
+}
+
+function getSelectedType() {
+  return document.querySelector('input[name="type"]:checked')?.value || "Word";
 }
 
 function loadSettings() {
@@ -347,17 +446,40 @@ async function createAccessCode() {
 function renderUsers(users) {
   elements.usersList.innerHTML = users.map((user) => `
     <article class="admin-item">
-      <strong>${escapeHtml(user.displayName || user.id)}</strong>
-      <small>${escapeHtml(user.id)} · ${escapeHtml(user.plan)} · ${user.isActive ? "فعال" : "غیرفعال"}</small>
+      <div>
+        <strong>${escapeHtml(user.displayName || user.id)}</strong>
+        <small>${escapeHtml(user.id)} · ${escapeHtml(user.plan)} · ${user.isActive ? "فعال" : "غیرفعال"}</small>
+      </div>
+      <button class="mini-button" type="button" data-user-id="${escapeHtml(user.id)}" data-active="${user.isActive}">
+        ${user.isActive ? "غیرفعال کن" : "فعال کن"}
+      </button>
     </article>
   `).join("");
+
+  elements.usersList.querySelectorAll(".mini-button").forEach((button) => {
+    button.addEventListener("click", () => toggleUserActive(button.dataset.userId, button.dataset.active !== "true"));
+  });
+}
+
+async function toggleUserActive(id, isActive) {
+  try {
+    await adminFetch(`/api/admin/users/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ isActive })
+    });
+    await loadAdmin();
+  } catch (error) {
+    showToast(error.message || "وضعیت کاربر تغییر نکرد.");
+  }
 }
 
 function renderCodes(codes) {
   elements.codesList.innerHTML = codes.map((code) => `
     <article class="admin-item">
-      <strong>${escapeHtml(code.code)}</strong>
-      <small>${escapeHtml(code.plan)} · ${toPersianNumber(code.uses)}/${toPersianNumber(code.maxUses)}</small>
+      <div>
+        <strong>${escapeHtml(code.code)}</strong>
+        <small>${escapeHtml(code.plan)} · ${toPersianNumber(code.uses)}/${toPersianNumber(code.maxUses)}</small>
+      </div>
     </article>
   `).join("");
 }
@@ -388,7 +510,7 @@ function renderBoxes(boxes) {
 
 function renderDeck(cards) {
   elements.deckList.innerHTML = cards.length ? cards.map((card) => `
-    <article class="deck-item">
+    <article class="deck-item ${card.type === "Feedback" ? "feedback-item" : ""}">
       <h3>${escapeHtml(card.front)}</h3>
       <p>${escapeHtml(card.back)}</p>
       <footer><span>${typeLabels[card.type] ?? "کارت"}</span><span>جعبه ${toPersianNumber(card.box)}</span></footer>

@@ -10,6 +10,8 @@
   --primary-text: #ffffff;
   --success: #168a55;
   --danger: #c33d3d;
+  --warning: #b7791f;
+  --feedback: #7c3aed;
   --shadow: 0 14px 34px rgba(16, 24, 39, 0.10);
 }
 
@@ -25,6 +27,8 @@
   --primary-text: #06101d;
   --success: #48d18d;
   --danger: #ff7b7b;
+  --warning: #f6c768;
+  --feedback: #a78bfa;
   --shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
 }
 
@@ -381,6 +385,22 @@ textarea:focus {
   margin-bottom: 12px;
 }
 
+.ai-panel {
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.feedback-mode .ai-panel,
+.feedback-mode .card-form {
+  border-color: color-mix(in srgb, var(--feedback), var(--line) 35%);
+}
+
+.mode-hint {
+  margin: -2px 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.75;
+}
+
 .panel-title {
   display: grid;
   gap: 4px;
@@ -430,6 +450,8 @@ textarea:focus {
 
 .admin-item {
   display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
   gap: 4px;
   padding: 11px;
   border: 1px solid var(--line);
@@ -438,14 +460,28 @@ textarea:focus {
 }
 
 .admin-item small {
+  display: block;
+  margin-top: 3px;
   color: var(--muted);
   direction: ltr;
   text-align: left;
 }
 
+.mini-button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 10px;
+  font-size: 0.76rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
 .segmented {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 6px;
   padding: 5px;
   border-radius: 13px;
@@ -458,14 +494,64 @@ textarea:focus {
   align-items: center;
   justify-content: center;
   gap: 5px;
+  border: 1px solid transparent;
   border-radius: 10px;
   color: var(--muted);
   font-weight: 900;
 }
 
+.segmented input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
 .segmented label:has(input:checked) {
   background: var(--surface);
+  border-color: var(--line);
   color: var(--text);
+}
+
+.segmented .feedback-choice:has(input:checked) {
+  color: var(--feedback);
+  border-color: color-mix(in srgb, var(--feedback), var(--line) 35%);
+}
+
+.feedback-guide {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--feedback), var(--line) 35%);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--feedback), var(--surface) 91%);
+}
+
+.feedback-guide[hidden] {
+  display: none;
+}
+
+.feedback-guide strong {
+  color: var(--feedback);
+  font-size: 0.94rem;
+}
+
+.feedback-guide span {
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.75;
+}
+
+.feedback-guide code {
+  direction: ltr;
+  text-align: left;
+  display: block;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
 }
 
 .card-form label,
@@ -504,6 +590,10 @@ textarea:focus {
 .deck-item {
   border-radius: 14px;
   padding: 13px;
+}
+
+.deck-item.feedback-item {
+  border-color: color-mix(in srgb, var(--feedback), var(--line) 35%);
 }
 
 .deck-item h3 {
@@ -569,6 +659,15 @@ textarea:focus {
   opacity: 1;
 }
 
+.feedback-review .card-meta span:first-child {
+  background: color-mix(in srgb, var(--feedback), var(--surface) 82%);
+  color: var(--feedback);
+}
+
+.feedback-review .flash-face {
+  background: color-mix(in srgb, var(--feedback), var(--surface-2) 90%);
+}
+
 @media (max-width: 390px) {
   .app-shell {
     padding-inline: 10px;
@@ -589,8 +688,15 @@ textarea:focus {
 
   .ai-row,
   .tool-row,
-  .admin-grid,
+  .admin-grid {
+    grid-template-columns: 1fr;
+  }
+
   .segmented {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .admin-item {
     grid-template-columns: 1fr;
   }
 }

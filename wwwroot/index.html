@@ -56,13 +56,13 @@
           <i></i><i></i><i></i><i></i><i></i>
         </div>
         <div class="flash-face">
-          <small>روی کارت</small>
+          <small id="frontCaption">روی کارت</small>
           <div class="prompt" id="frontText">در حال آماده‌سازی...</div>
           <p class="example" id="exampleText"></p>
         </div>
         <button class="primary-button" id="revealButton" type="button">نمایش جواب</button>
         <div class="answer-panel" id="answerPanel" hidden>
-          <small>پشت کارت</small>
+          <small id="backCaption">پشت کارت</small>
           <p id="backText"></p>
           <p id="qaText"></p>
           <div class="review-actions">
@@ -78,51 +78,60 @@
     </section>
 
     <section class="view" id="addView">
-      <article class="panel">
+      <article class="panel ai-panel" id="aiPanel">
         <div class="panel-title">
-          <strong>تکمیل خودکار با OpenRouter</strong>
+          <strong id="aiPanelTitle">تکمیل خودکار با OpenRouter</strong>
           <span id="modelText">مدل از تنظیمات سرور خوانده می‌شود.</span>
         </div>
         <div class="ai-row">
-          <input id="aiWordInput" autocomplete="off" placeholder="لغت، عبارت یا فیدبک مثل: I programmer">
+          <input id="aiWordInput" autocomplete="off" placeholder="لغت، عبارت یا جمله را بنویس">
           <button class="primary-button compact" id="completeAiButton" type="button">پر کن</button>
         </div>
+        <p class="mode-hint" id="aiPanelHint">AI معنی، مثال، سوال تمرینی و جواب را برای کارت آماده می‌کند.</p>
       </article>
 
       <form class="panel card-form" id="cardForm">
         <div class="panel-title">
           <strong>کارت جدید</strong>
-          <span>نوع کارت را انتخاب کن؛ برای Feedback متن اشتباه یا فیدبک استاد را بده.</span>
+          <span id="typeHelper">نوع کارت را انتخاب کن؛ فرم و دستور AI بر همان اساس تنظیم می‌شود.</span>
         </div>
-        <div class="segmented" role="group" aria-label="نوع کارت">
-          <label><input type="radio" name="type" value="Word" checked> لغت</label>
-          <label><input type="radio" name="type" value="Sentence"> جمله</label>
-          <label><input type="radio" name="type" value="Question"> پرسش</label>
-          <label><input type="radio" name="type" value="Feedback"> فیدبک</label>
+
+        <div class="segmented" role="radiogroup" aria-label="نوع کارت">
+          <label><input type="radio" name="type" value="Word" checked><span>لغت</span></label>
+          <label><input type="radio" name="type" value="Sentence"><span>جمله</span></label>
+          <label><input type="radio" name="type" value="Question"><span>پرسش</span></label>
+          <label class="feedback-choice"><input type="radio" name="type" value="Feedback"><span>فیدبک</span></label>
         </div>
+
+        <section class="feedback-guide" id="feedbackGuide" aria-live="polite">
+          <strong>کارت فیدبک برای اصلاح اشتباه است</strong>
+          <span>اشتباه خودت یا حرف استاد را بنویس؛ AI کارت را با «اشتباه، اصلاح، دلیل، تمرین و جواب» می‌سازد.</span>
+          <code>wrong: I programmer → correct: I am a programmer</code>
+        </section>
+
         <label>
-          <span>روی کارت</span>
-          <input id="frontInput" name="front" autocomplete="off" placeholder="wrong: I programmer → correct: I am a programmer" required>
+          <span id="frontLabel">روی کارت</span>
+          <input id="frontInput" name="front" autocomplete="off" placeholder="resilient" required>
         </label>
         <label>
-          <span>توضیح / پشت کارت</span>
-          <textarea id="backInput" name="back" rows="3" placeholder="توضیح فارسی یا معنی" required></textarea>
+          <span id="backLabel">پشت کارت / توضیح</span>
+          <textarea id="backInput" name="back" rows="3" placeholder="معنی یا توضیح فارسی" required></textarea>
         </label>
         <label>
-          <span>مثال درست</span>
-          <textarea id="exampleInput" name="example" rows="2" placeholder="I am a programmer."></textarea>
+          <span id="exampleLabel">مثال</span>
+          <textarea id="exampleInput" name="example" rows="2" placeholder="She stayed resilient."></textarea>
         </label>
         <label>
-          <span>سؤال تمرینی</span>
-          <input id="promptInput" name="prompt" autocomplete="off" placeholder="Correct this sentence: I programmer.">
+          <span id="promptLabel">سوال تمرینی</span>
+          <input id="promptInput" name="prompt" autocomplete="off" placeholder="What does resilient mean?">
         </label>
         <label>
-          <span>جواب پیشنهادی</span>
-          <input id="answerInput" name="answer" autocomplete="off" placeholder="I am a programmer.">
+          <span id="answerLabel">جواب پیشنهادی</span>
+          <input id="answerInput" name="answer" autocomplete="off" placeholder="تاب‌آور">
         </label>
         <label>
-          <span>یادداشت</span>
-          <input id="notesInput" name="notes" autocomplete="off" placeholder="نکته گرامری، خطای رایج، الگو">
+          <span id="notesLabel">یادداشت</span>
+          <input id="notesInput" name="notes" autocomplete="off" placeholder="کاربرد، خطای رایج، الگو">
         </label>
         <button class="primary-button" type="submit">افزودن به لایتنر</button>
       </form>
@@ -154,7 +163,7 @@
       <article class="panel">
         <div class="panel-title">
           <strong>خروجی و ورودی دیتا</strong>
-          <span>برای جابه‌جایی کارت‌ها بین اکانت‌ها یا بکاپ گرفتن.</span>
+          <span>برای بکاپ گرفتن یا انتقال کارت‌ها بین اکانت‌ها.</span>
         </div>
         <div class="tool-row">
           <button class="secondary-button" id="exportButton" type="button">Export JSON</button>
@@ -170,7 +179,7 @@
       <form class="panel" id="adminLoginForm">
         <div class="panel-title">
           <strong>پنل ادمین</strong>
-          <span>توکن ادمین از env سرور خوانده می‌شود. اینجا فقط برای درخواست‌های پنل واردش کن.</span>
+          <span>این مقدار همان ADMIN_TOKEN سرور است. داخل اپ ذخیره محلی می‌شود و فقط برای درخواست‌های ادمین استفاده می‌شود.</span>
         </div>
         <input id="adminTokenInput" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
         <button class="primary-button" type="submit">ورود ادمین</button>
@@ -179,7 +188,7 @@
       <article class="panel" id="adminPanel" hidden>
         <div class="panel-title">
           <strong>ساخت کد دسترسی</strong>
-          <span>پیش‌فرض همه قابلیت‌ها باز است؛ می‌توانی از پنل دسترسی کاربران را کنترل کنی.</span>
+          <span>فعلا پیش‌فرض همه قابلیت‌ها باز است؛ بعدا می‌توان پلن‌ها را محدودتر کرد.</span>
         </div>
         <div class="admin-grid">
           <input id="codePlanInput" placeholder="Plan مثلا Free یا Pro">
@@ -189,7 +198,7 @@
         <div class="admin-list" id="codesList"></div>
         <div class="panel-title">
           <strong>کاربران</strong>
-          <span>فعال/غیرفعال و سطح دسترسی کاربران اینجا دیده می‌شود.</span>
+          <span>کاربران بر اساس شناسه تلگرام جدا ذخیره می‌شوند؛ موبایل و دسکتاپ همان اکانت به کارت‌های یکسان می‌رسند.</span>
         </div>
         <div class="admin-list" id="usersList"></div>
       </article>
