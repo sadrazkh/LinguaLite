@@ -275,18 +275,32 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
             ? settings.PublicBaseUrl
             : settings.TelegramMiniAppUrl;
 
-        object? replyMarkup = string.IsNullOrWhiteSpace(miniAppUrl)
-            ? null
-            : new
+        miniAppUrl = miniAppUrl?.Trim();
+
+        // اگر لینک بدون پروتکل ذخیره شده بود، HTTPS اضافه کن
+        if (!string.IsNullOrWhiteSpace(miniAppUrl) &&
+            !miniAppUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+            !miniAppUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            miniAppUrl = $"https://{miniAppUrl}";
+        }
+
+        var hasValidWebAppUrl =
+            Uri.TryCreate(miniAppUrl, UriKind.Absolute, out var uri) &&
+            uri.Scheme == Uri.UriSchemeHttps;
+
+        object? replyMarkup = hasValidWebAppUrl
+            ? new
             {
                 inline_keyboard = new[]
                 {
-                    new object[]
-                    {
-                        new { text = "باز کردن اپ", web_app = new { url = miniAppUrl } }
-                    }
+                new object[]
+                {
+                    new { text = "باز کردن اپ", web_app = new { url = miniAppUrl } }
                 }
-            };
+                }
+            }
+            : null;
 
         using var response = await httpClient.PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage", new
         {
@@ -296,11 +310,66 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
         });
 
         var body = await response.Content.ReadAsStringAsync();
+
+        // اگر با دکمه WebApp خطا خورد، دوباره بدون دکمه بفرست تا فانکشن‌های ربات نخوابن
         if (!response.IsSuccessStatusCode || !IsTelegramOk(body))
         {
+            if (replyMarkup is not null)
+            {
+                using var fallbackResponse = await httpClient.PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage", new
+                {
+                    chat_id = chatId,
+                    text
+                });
+
+                var fallbackBody = await fallbackResponse.Content.ReadAsStringAsync();
+
+                if (fallbackResponse.IsSuccessStatusCode && IsTelegramOk(fallbackBody))
+                    return;
+
+                throw new InvalidOperationException($"Telegram sendMessage failed: {TelegramDescription(fallbackBody)}");
+            }
+
             throw new InvalidOperationException($"Telegram sendMessage failed: {TelegramDescription(body)}");
         }
     }
+
+
+    //private async Task SendMessageAsync(long chatId, string text, AppSettingsState settings)
+    //{
+    //    var token = configuration["TELEGRAM_BOT_TOKEN"];
+    //    if (string.IsNullOrWhiteSpace(token)) return;
+
+    //    var miniAppUrl = string.IsNullOrWhiteSpace(settings.TelegramMiniAppUrl)
+    //        ? settings.PublicBaseUrl
+    //        : settings.TelegramMiniAppUrl;
+
+    //    object? replyMarkup = string.IsNullOrWhiteSpace(miniAppUrl)
+    //        ? null
+    //        : new
+    //        {
+    //            inline_keyboard = new[]
+    //            {
+    //                new object[]
+    //                {
+    //                    new { text = "باز کردن اپ", web_app = new { url = miniAppUrl } }
+    //                }
+    //            }
+    //        };
+
+    //    using var response = await httpClient.PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage", new
+    //    {
+    //        chat_id = chatId,
+    //        text,
+    //        reply_markup = replyMarkup
+    //    });
+
+    //    var body = await response.Content.ReadAsStringAsync();
+    //    if (!response.IsSuccessStatusCode || !IsTelegramOk(body))
+    //    {
+    //        throw new InvalidOperationException($"Telegram sendMessage failed: {TelegramDescription(body)}");
+    //    }
+    //}
 
     private async Task<TelegramApiRawResult> SetMyCommandsAsync(string token)
     {
@@ -363,6 +432,9 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
 
         return body;
     }
+
+
+
 }
 
 public sealed record TelegramApiRawResult(bool Ok, int Status, string Body, string Description);
