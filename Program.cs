@@ -123,7 +123,8 @@ api.MapGet("/config", async (HttpContext http, IConfiguration config, IAppStore 
         adminEnabled = !string.IsNullOrWhiteSpace(config["ADMIN_TOKEN"]),
         openRouterModel = openRouter.DefaultModel,
         miniAppUrl = settings.TelegramMiniAppUrl,
-        aiServerKeyConfigured = !string.IsNullOrWhiteSpace(config["OPENROUTER_API_KEY"])
+        aiServerKeyConfigured = ResolveOpenRouterApiKeys(config).Count > 0,
+        aiServerKeysCount = ResolveOpenRouterApiKeys(config).Count
     });
 });
 
@@ -331,12 +332,7 @@ api.MapPost("/ai/complete", async (AiCompleteRequest request, HttpContext http, 
         return Results.BadRequest(new { message = "متن کارت یا فیدبک را وارد کنید." });
     }
 
-    var apiKey = http.Request.Headers["X-OpenRouter-Api-Key"].FirstOrDefault();
-    if (string.IsNullOrWhiteSpace(apiKey))
-    {
-        apiKey = config["OPENROUTER_API_KEY"];
-    }
-
+    var apiKey = ResolveOpenRouterApiKey(http, config);
     if (string.IsNullOrWhiteSpace(apiKey))
     {
         return Results.BadRequest(new { message = "OPENROUTER_API_KEY را روی سرور بگذارید یا کلید را در تنظیمات اپ وارد کنید." });
@@ -462,6 +458,44 @@ admin.MapGet("/codes", async (HttpContext http, IConfiguration config, IAppStore
 {
     if (!IsAdmin(http, config)) return Results.Unauthorized();
     return Results.Ok(await store.GetAccessCodesAsync());
+});
+
+admin.MapPut("/codes/{code}", async (HttpContext http, IConfiguration config, string code, UpdateAccessCodeRequest request, IAppStore store) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    var updated = await store.UpdateAccessCodeAsync(code, request);
+    return updated is null ? Results.NotFound(new { message = "کد پیدا نشد." }) : Results.Ok(updated);
+});
+
+admin.MapGet("/codes/usage", async (HttpContext http, IConfiguration config, IAppStore store) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    var users = await store.GetUsersAsync();
+    var usage = users
+        .Where(user => !string.IsNullOrWhiteSpace(user.AccessCode))
+        .GroupBy(user => user.AccessCode.Trim().ToUpperInvariant())
+        .Select(group => new AccessCodeUsage
+        {
+            Code = group.Key,
+            UsersCount = group.Count(),
+            Users = group
+                .OrderByDescending(user => user.LastSeenAt)
+                .Select(user => new AccessCodeUser
+                {
+                    UserId = user.Id,
+                    DisplayName = user.DisplayName,
+                    TelegramId = user.TelegramId,
+                    TelegramUsername = user.TelegramUsername,
+                    Plan = user.Plan,
+                    LastSeenAt = user.LastSeenAt
+                })
+                .ToList()
+        })
+        .OrderByDescending(item => item.UsersCount)
+        .ThenBy(item => item.Code)
+        .ToList();
+
+    return Results.Ok(usage);
 });
 
 admin.MapGet("/plans", async (HttpContext http, IConfiguration config, IAppStore store) =>
@@ -610,7 +644,23 @@ static bool IsAdmin(HttpContext http, IConfiguration config)
 static string? ResolveOpenRouterApiKey(HttpContext http, IConfiguration config)
 {
     var apiKey = http.Request.Headers["X-OpenRouter-Api-Key"].FirstOrDefault();
-    return string.IsNullOrWhiteSpace(apiKey) ? config["OPENROUTER_API_KEY"] : apiKey;
+    if (!string.IsNullOrWhiteSpace(apiKey)) return apiKey.Trim();
+
+    var keys = ResolveOpenRouterApiKeys(config);
+    if (keys.Count == 0) return null;
+    if (keys.Count == 1) return keys[0];
+    return keys[RandomNumberGenerator.GetInt32(keys.Count)];
+}
+
+static List<string> ResolveOpenRouterApiKeys(IConfiguration config)
+{
+    var values = new[] { config["OPENROUTER_API_KEYS"], config["OPENROUTER_API_KEY"] };
+    return values
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .SelectMany(value => value!.Split([',', ';', '\n', '\r'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        .Where(value => !string.IsNullOrWhiteSpace(value))
+        .Distinct(StringComparer.Ordinal)
+        .ToList();
 }
 
 static string ResolvePublicBaseUrl(HttpContext http, IConfiguration config, AppSettingsState settings)

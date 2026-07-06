@@ -26,6 +26,11 @@ const elements = {
   addPlanButton: $("#addPlanButton"),
   plansBoard: $("#plansBoard"),
   usersList: $("#usersList"),
+  usersPagination: $("#usersPagination"),
+  prevUsersPageButton: $("#prevUsersPageButton"),
+  nextUsersPageButton: $("#nextUsersPageButton"),
+  usersPageText: $("#usersPageText"),
+  customCodeInput: $("#customCodeInput"),
   codePlanInput: $("#codePlanInput"),
   codeMaxUsesInput: $("#codeMaxUsesInput"),
   createCodeButton: $("#createCodeButton"),
@@ -33,7 +38,7 @@ const elements = {
   toast: $("#toast")
 };
 
-let state = { users: [], metrics: [], plans: [], codes: [], settings: null, draggingPlanId: null };
+let state = { users: [], metrics: [], plans: [], codes: [], codeUsage: [], settings: null, draggingPlanId: null, usersPage: 1, usersPageSize: 10 };
 
 elements.loginForm.addEventListener("submit", adminLogin);
 elements.logoutButton.addEventListener("click", logout);
@@ -42,6 +47,8 @@ elements.setWebhookButton.addEventListener("click", setWebhook);
 elements.botStatusButton.addEventListener("click", loadBotStatus);
 elements.addPlanButton.addEventListener("click", addPlan);
 elements.createCodeButton.addEventListener("click", createCode);
+elements.prevUsersPageButton.addEventListener("click", () => changeUsersPage(-1));
+elements.nextUsersPageButton.addEventListener("click", () => changeUsersPage(1));
 
 const savedToken = localStorage.getItem(storage.token);
 if (savedToken) {
@@ -59,14 +66,16 @@ async function adminLogin(event) {
 
 async function loadAll() {
   setStatus("در حال بارگذاری...", "");
-  const [users, metrics, codes, plans, settingsPayload] = await Promise.all([
+  const [users, metrics, codes, codeUsage, plans, settingsPayload] = await Promise.all([
     adminFetch("/api/admin/users"),
     adminFetch("/api/admin/user-metrics"),
     adminFetch("/api/admin/codes"),
+    adminFetch("/api/admin/codes/usage"),
     adminFetch("/api/admin/plans"),
     adminFetch("/api/admin/settings")
   ]);
-  state = { ...state, users, metrics, codes, plans, settings: settingsPayload.settings };
+  state = { ...state, users, metrics, codes, codeUsage, plans, settings: settingsPayload.settings };
+  state.usersPage = Math.min(state.usersPage, getUsersPageCount());
   elements.dashboard.hidden = false;
   elements.logoutButton.hidden = false;
   setStatus("ادمین تایید شد.", "ok");
@@ -153,7 +162,12 @@ function renderPlans() {
 }
 
 function renderUsers() {
-  elements.usersList.innerHTML = state.users.map(user => {
+  const pageCount = getUsersPageCount();
+  state.usersPage = Math.min(Math.max(state.usersPage, 1), pageCount);
+  const start = (state.usersPage - 1) * state.usersPageSize;
+  const pageUsers = state.users.slice(start, start + state.usersPageSize);
+
+  elements.usersList.innerHTML = pageUsers.map(user => {
     const plan = findPlan(user.plan);
     const metrics = findMetrics(user.id);
     return `
@@ -161,7 +175,7 @@ function renderUsers() {
         <div>
           <strong>${escapeHtml(user.displayName || user.id)}</strong>
           <small>${escapeHtml(user.id)} · tg:${escapeHtml(user.telegramId || "-")} · @${escapeHtml(user.telegramUsername || "-")}</small>
-          <small>${escapeHtml(user.source)} · <b class="inline-badge" style="background:${safeColor(plan?.badgeColor, "#16a34a")};color:${safeColor(plan?.badgeTextColor, "#ffffff")}">${escapeHtml(user.plan)}</b> · ${user.isActive ? "فعال" : "غیرفعال"} · ${escapeHtml(featureSummary(user.features))}</small>
+          <small>${escapeHtml(user.source)} · <b class="inline-badge" style="background:${safeColor(plan?.badgeColor, "#16a34a")};color:${safeColor(plan?.badgeTextColor, "#ffffff")}">${escapeHtml(user.plan)}</b> · ${user.isActive ? "فعال" : "غیرفعال"} · کد: ${escapeHtml(user.accessCode || "-")} · ${escapeHtml(featureSummary(user.features))}</small>
           <div class="user-metrics">
             <span>کارت: ${toPersianNumber(metrics.totalCards)}</span>
             <span>مرور آماده: ${toPersianNumber(metrics.dueCards)}</span>
@@ -184,25 +198,50 @@ function renderUsers() {
   }).join("");
 
   elements.usersList.querySelectorAll(".admin-item").forEach((item, index) => {
-    const user = state.users[index];
+    const user = pageUsers[index];
     item.querySelector('[data-user-field="plan"]').addEventListener("change", event => updateUser(user.id, { plan: event.target.value }));
     item.querySelector('[data-action="toggle-active"]').addEventListener("click", () => updateUser(user.id, { isActive: !user.isActive }));
     item.querySelector('[data-action="toggle-reminder"]').addEventListener("click", () => updateUser(user.id, { remindersEnabled: !user.remindersEnabled }));
   });
+
+  elements.usersPagination.hidden = state.users.length <= state.usersPageSize;
+  elements.usersPageText.textContent = `صفحه ${toPersianNumber(state.usersPage)} از ${toPersianNumber(pageCount)} · ${toPersianNumber(state.users.length)} کاربر`;
+  elements.prevUsersPageButton.disabled = state.usersPage <= 1;
+  elements.nextUsersPageButton.disabled = state.usersPage >= pageCount;
 }
 
 function renderCodes() {
   elements.codesList.innerHTML = state.codes.map(code => {
     const plan = findPlan(code.plan);
+    const usage = findCodeUsage(code.code);
+    const users = usage.users.slice(0, 6).map(user => `
+      <span class="code-user-chip">
+        ${escapeHtml(user.displayName || user.userId)}
+        <small>@${escapeHtml(user.telegramUsername || "-")} · ${formatAdminDate(user.lastSeenAt)}</small>
+      </span>
+    `).join("");
     return `
-      <article class="admin-item">
+      <article class="admin-item code-item" data-code="${escapeHtml(code.code)}">
         <div>
           <strong>${escapeHtml(code.code)}</strong>
           <small><b class="inline-badge" style="background:${safeColor(plan?.badgeColor, "#16a34a")};color:${safeColor(plan?.badgeTextColor, "#ffffff")}">${escapeHtml(code.plan)}</b> · ${toPersianNumber(code.uses)}/${toPersianNumber(code.maxUses)}</small>
+          <div class="code-users">
+            <b>استفاده‌کننده‌ها: ${toPersianNumber(usage.usersCount)}</b>
+            ${users || "<span>هنوز کسی با این کد فعال نکرده.</span>"}
+          </div>
+        </div>
+        <div class="code-controls">
+          <select data-code-field="plan">${state.plans.map(planItem => `<option value="${escapeHtml(planItem.name)}" ${planItem.name === code.plan ? "selected" : ""}>${escapeHtml(planItem.name)}</option>`).join("")}</select>
+          <input data-code-field="maxUses" type="number" min="${code.uses}" value="${code.maxUses}">
+          <button class="mini-button" type="button" data-action="save-code">ذخیره</button>
         </div>
       </article>
     `;
   }).join("");
+
+  elements.codesList.querySelectorAll(".code-item").forEach(item => {
+    item.querySelector('[data-action="save-code"]').addEventListener("click", () => saveAccessCode(item));
+  });
 }
 
 async function saveSettings(event) {
@@ -368,12 +407,30 @@ async function createCode() {
   const code = await adminFetch("/api/admin/codes", {
     method: "POST",
     body: JSON.stringify({
+      code: elements.customCodeInput.value.trim(),
       plan: plan?.name || "Free",
       maxUses: Number(elements.codeMaxUsesInput.value || 1),
       features: plan?.features || defaultFeatures()
     })
   });
+  elements.customCodeInput.value = "";
   showToast(`کد ساخته شد: ${code.code}`);
+  await loadAll();
+}
+
+async function saveAccessCode(item) {
+  const code = item.dataset.code;
+  const plan = findPlan(item.querySelector('[data-code-field="plan"]').value) || state.plans[0];
+  const maxUses = Number(item.querySelector('[data-code-field="maxUses"]').value || 1);
+  await adminFetch(`/api/admin/codes/${encodeURIComponent(code)}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      plan: plan?.name || "Free",
+      features: plan?.features || defaultFeatures(),
+      maxUses
+    })
+  });
+  showToast("کد دسترسی ذخیره شد.");
   await loadAll();
 }
 
@@ -471,6 +528,32 @@ function findMetrics(userId) {
     aiDictionaryToday: 0,
     aiCorrectionToday: 0
   };
+}
+
+function findCodeUsage(code) {
+  return state.codeUsage.find(item => item.code === code) || { code, usersCount: 0, users: [] };
+}
+
+function getUsersPageCount() {
+  return Math.max(1, Math.ceil(state.users.length / state.usersPageSize));
+}
+
+function changeUsersPage(delta) {
+  state.usersPage = Math.min(Math.max(1, state.usersPage + delta), getUsersPageCount());
+  renderUsers();
+}
+
+function formatAdminDate(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
 }
 
 function safeColor(value, fallback) {

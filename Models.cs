@@ -163,6 +163,23 @@ public sealed class AccessCode
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+public sealed class AccessCodeUsage
+{
+    public string Code { get; set; } = string.Empty;
+    public int UsersCount { get; set; }
+    public List<AccessCodeUser> Users { get; set; } = [];
+}
+
+public sealed class AccessCodeUser
+{
+    public string UserId { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string TelegramId { get; set; } = string.Empty;
+    public string TelegramUsername { get; set; } = string.Empty;
+    public string Plan { get; set; } = string.Empty;
+    public DateTimeOffset LastSeenAt { get; set; }
+}
+
 public sealed class DeckState
 {
     public List<FlashCard> Cards { get; set; } = [];
@@ -257,6 +274,7 @@ public sealed record BrowserLoginResult(bool Success, string Message, string Ses
 }
 public sealed record AdminUpdateUserRequest(bool? IsActive, string? Plan, FeatureSet? Features, bool? RemindersEnabled, int? ReminderHour);
 public sealed record CreateAccessCodeRequest(string? Code, string? Plan, FeatureSet? Features, int? MaxUses);
+public sealed record UpdateAccessCodeRequest(string? Plan, FeatureSet? Features, int? MaxUses);
 public sealed record UpdateCardRequest(string Front, string Back, string? Example, string? Prompt, string? Answer, string? Notes, CardType Type = CardType.Word);
 public sealed record UpsertPlanRequest(string Id, string Name, string? BadgeColor, string? BadgeTextColor, FeatureSet Features, int AiDailyLimit, int AiMonthlyLimit, int DictionaryDailyLimit, int DictionaryMonthlyLimit, int CorrectionDailyLimit, int CorrectionMonthlyLimit, int CardLimit, int SortOrder, bool IsDefault);
 public sealed record UpdateSettingsRequest(string? OpenRouterModel, string? OpenRouterReferer, string? PublicBaseUrl, string? TelegramBotUsername, string? TelegramMiniAppUrl, bool? BotEnabled, bool? RemindersEnabled, int? ReminderHour);

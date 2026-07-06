@@ -12,6 +12,7 @@ public interface IAppStore
     Task<UserProfile?> UpdateUserAsync(string id, Action<UserProfile> update);
     Task<AccessCode> CreateAccessCodeAsync(CreateAccessCodeRequest request);
     Task<List<AccessCode>> GetAccessCodesAsync();
+    Task<AccessCode?> UpdateAccessCodeAsync(string code, UpdateAccessCodeRequest request);
     Task<RedeemResult> RedeemCodeAsync(string userId, string codeText);
     Task<List<PlanDefinition>> GetPlansAsync();
     Task<PlanDefinition> UpsertPlanAsync(PlanDefinition plan);

@@ -401,6 +401,38 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         return codes;
     }
 
+    public async Task<AccessCode?> UpdateAccessCodeAsync(string codeText, UpdateAccessCodeRequest request)
+    {
+        await EnsureReadyAsync();
+        var normalized = codeText.Trim().ToUpperInvariant();
+
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var code = await FindAccessCodeAsync(connection, transaction, normalized);
+        if (code is null) return null;
+
+        if (!string.IsNullOrWhiteSpace(request.Plan)) code.Plan = request.Plan.Trim();
+        if (request.Features is not null) code.Features = request.Features;
+        if (request.MaxUses.HasValue) code.MaxUses = Math.Max(code.Uses, request.MaxUses.Value);
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            UPDATE app_access_codes
+            SET plan = @plan,
+                features = @features,
+                max_uses = @max_uses
+            WHERE code = @code;
+            """;
+        command.Parameters.AddWithValue("code", code.Code);
+        command.Parameters.AddWithValue("plan", code.Plan);
+        command.Parameters.Add("features", NpgsqlDbType.Jsonb).Value = JsonSerializer.Serialize(code.Features, JsonOptions);
+        command.Parameters.AddWithValue("max_uses", code.MaxUses);
+        await command.ExecuteNonQueryAsync();
+        await transaction.CommitAsync();
+        return code;
+    }
+
     public async Task<RedeemResult> RedeemCodeAsync(string userId, string codeText)
     {
         await EnsureReadyAsync();

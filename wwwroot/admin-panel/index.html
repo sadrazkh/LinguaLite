@@ -13,9 +13,12 @@
 <body>
   <main class="admin-shell">
     <header class="admin-header">
-      <div>
-        <p>LinguaLite</p>
-        <h1>پنل مدیریت</h1>
+      <div class="admin-brand">
+        <img src="/icons/lingualite-logo.png" alt="LinguaLite">
+        <div>
+          <p>LinguaLite</p>
+          <h1>پنل مدیریت</h1>
+        </div>
       </div>
       <a class="secondary-button admin-link" href="/">بازگشت به اپ</a>
     </header>
@@ -79,6 +82,11 @@
           <span>شناسه تلگرام، username، پلن، یادآوری و وضعیت هر کاربر اینجا دیده و مدیریت می‌شود.</span>
         </div>
         <div class="admin-list" id="usersList"></div>
+        <div class="pagination-row" id="usersPagination">
+          <button class="mini-button" id="prevUsersPageButton" type="button">قبلی</button>
+          <span id="usersPageText">صفحه ۱</span>
+          <button class="mini-button" id="nextUsersPageButton" type="button">بعدی</button>
+        </div>
       </section>
 
       <section class="panel">
@@ -87,6 +95,7 @@
           <span>کد بساز تا کاربر با وارد کردن آن پلن و دسترسی‌های همان پلن را بگیرد.</span>
         </div>
         <div class="admin-grid">
+          <input id="customCodeInput" placeholder="کد کاستوم اختیاری مثل PLUS1405">
           <select id="codePlanInput"></select>
           <input id="codeMaxUsesInput" type="number" min="1" value="1">
           <button class="secondary-button" id="createCodeButton" type="button">ساخت کد</button>

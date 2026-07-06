@@ -169,6 +169,19 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         return db.AccessCodes.Values.OrderByDescending(code => code.CreatedAt).ToList();
     }
 
+    public async Task<AccessCode?> UpdateAccessCodeAsync(string codeText, UpdateAccessCodeRequest request)
+    {
+        return await MutateAsync(db =>
+        {
+            var normalized = codeText.Trim().ToUpperInvariant();
+            if (!db.AccessCodes.TryGetValue(normalized, out var code)) return null;
+            if (!string.IsNullOrWhiteSpace(request.Plan)) code.Plan = request.Plan.Trim();
+            if (request.Features is not null) code.Features = request.Features;
+            if (request.MaxUses.HasValue) code.MaxUses = Math.Max(code.Uses, request.MaxUses.Value);
+            return code;
+        });
+    }
+
     public async Task<RedeemResult> RedeemCodeAsync(string userId, string codeText)
     {
         return await MutateAsync(db =>

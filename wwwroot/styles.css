@@ -129,16 +129,12 @@ select:focus {
 }
 
 .brand-mark {
-  display: grid;
-  place-items: center;
   flex: 0 0 auto;
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  background: var(--primary);
-  color: var(--primary-text);
-  font-weight: 900;
-  font-size: 1.25rem;
+  width: 54px;
+  height: 54px;
+  border-radius: 15px;
+  object-fit: cover;
+  box-shadow: var(--shadow);
 }
 
 .brand-copy {
@@ -811,11 +807,22 @@ body.auth-required .view {
 .deck-item footer {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
   color: var(--muted);
   font-size: 0.76rem;
   font-weight: 800;
+}
+
+.review-date {
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 900;
 }
 
 .deck-actions {

@@ -286,7 +286,9 @@ function renderProfile(config) {
   elements.planBadge.style.background = plan.badgeColor || "#16a34a";
   elements.planBadge.style.color = plan.badgeTextColor || "#ffffff";
   elements.accountStatusText.textContent = config.isActive ? `فعال · ${featureSummary(config.features)}` : "اکانت غیرفعال";
-  const keyStatus = config.aiServerKeyConfigured ? "کلید سرور فعال است" : "کلید را در اکانت وارد کن";
+  const keyStatus = config.aiServerKeyConfigured
+    ? `${toPersianNumber(config.aiServerKeysCount || 1)} کلید سرور فعال است`
+    : "کلید را در اکانت وارد کن";
   elements.modelText.textContent = `${config.openRouterModel || "-"} · ${keyStatus}`;
 }
 
@@ -386,7 +388,7 @@ function pickNextCard() {
   elements.frontCaption.textContent = isFeedback ? "تمرین اصلاح" : "روی کارت";
   elements.backCaption.textContent = isFeedback ? "دلیل و الگو" : "پشت کارت";
   elements.frontText.textContent = card.front;
-  elements.exampleText.textContent = card.example || card.prompt || "";
+  elements.exampleText.textContent = "";
   elements.backText.textContent = card.back;
   elements.qaText.textContent = [card.prompt, card.answer, card.notes].filter(Boolean).join(" · ");
   setBoxProgress(card.box);
@@ -747,6 +749,7 @@ function renderDeck(cards) {
       <div class="deck-back mixed" hidden>${escapeHtml(card.back)}</div>
       <footer>
         <span>جعبه ${toPersianNumber(card.box)}</span>
+        <span class="review-date">${escapeHtml(nextReviewLabel(card.nextReviewAt))}</span>
         <div class="deck-actions">
           <button class="mini-button" type="button" data-action="toggle-back">نمایش پشت</button>
           <button class="mini-button" type="button" data-action="edit">ویرایش</button>
@@ -850,6 +853,21 @@ function hasFeature(key) {
 
 function planLocked(name) {
   showToast(`${name} در پلن فعلی فعال نیست.`);
+}
+
+function nextReviewLabel(value) {
+  if (!value) return "مرور: -";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "مرور: -";
+  const due = date <= new Date();
+  const formatted = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+  return due ? `آماده مرور · ${formatted}` : `مرور بعدی · ${formatted}`;
 }
 
 function openRouterHeaders() {
