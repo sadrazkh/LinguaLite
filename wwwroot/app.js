@@ -73,10 +73,13 @@ const elements = {
   correctionButton: $("#correctionButton"),
   correctionQuotaText: $("#correctionQuotaText"),
   correctionResult: $("#correctionResult"),
-  settingsForm: $("#settingsForm"),
+  apiKeyForm: $("#apiKeyForm"),
+  activationForm: $("#activationForm"),
   apiKeyInput: $("#apiKeyInput"),
   redeemCodeInput: $("#redeemCodeInput"),
   redeemCodeButton: $("#redeemCodeButton"),
+  dailyReportText: $("#dailyReportText"),
+  usageGrid: $("#usageGrid"),
   exportButton: $("#exportButton"),
   importFileInput: $("#importFileInput"),
   frontLabel: $("#frontLabel"),
@@ -185,8 +188,8 @@ function bindEvents() {
   elements.completeAiButton.addEventListener("click", completeWithAi);
   elements.dictionaryButton.addEventListener("click", lookupDictionary);
   elements.correctionButton.addEventListener("click", correctText);
-  elements.settingsForm.addEventListener("submit", saveSettings);
-  elements.redeemCodeButton.addEventListener("click", redeemCode);
+  elements.apiKeyForm.addEventListener("submit", saveSettings);
+  elements.activationForm.addEventListener("submit", redeemCode);
   elements.exportButton.addEventListener("click", exportDeck);
   elements.importFileInput.addEventListener("change", importDeck);
 }
@@ -299,6 +302,7 @@ function renderQuota(config) {
   elements.cardQuotaText.textContent = usageLine("کارت AI", usage.card);
   elements.dictionaryQuotaText.textContent = usageLine("دیکشنری", usage.dictionary);
   elements.correctionQuotaText.textContent = usageLine("اصلاح متن", usage.correction);
+  renderUsageReport(config);
 }
 
 function usageLine(label, usage) {
@@ -306,6 +310,42 @@ function usageLine(label, usage) {
   const daily = usage.dailyLimit < 0 ? "نامحدود" : `${toPersianNumber(usage.today)}/${toPersianNumber(usage.dailyLimit)}`;
   const monthly = usage.monthlyLimit < 0 ? "نامحدود" : `${toPersianNumber(usage.thisMonth)}/${toPersianNumber(usage.monthlyLimit)}`;
   return `${label} · روزانه ${daily} · ماهانه ${monthly}`;
+}
+
+function renderUsageReport(config) {
+  const rows = [
+    { key: "card", label: "کارت AI", usage: config.usage?.card },
+    { key: "dictionary", label: "دیکشنری", usage: config.usage?.dictionary },
+    { key: "correction", label: "اصلاح متن", usage: config.usage?.correction }
+  ];
+  const totalToday = rows.reduce((sum, row) => sum + Number(row.usage?.today || 0), 0);
+  const totalLimit = rows.reduce((sum, row) => row.usage?.dailyLimit < 0 ? sum : sum + Number(row.usage?.dailyLimit || 0), 0);
+  const hasUnlimited = rows.some(row => row.usage?.dailyLimit < 0);
+  const planName = config.effectivePlan?.name || config.plan || "Free";
+
+  elements.dailyReportText.textContent = hasUnlimited
+    ? `امروز ${toPersianNumber(totalToday)} درخواست AI استفاده کردی. پلن ${planName} برای بخشی از ابزارها نامحدود است.`
+    : `امروز ${toPersianNumber(totalToday)} درخواست از سهمیه روزانه ${toPersianNumber(totalLimit)} درخواست استفاده شده است.`;
+
+  elements.usageGrid.innerHTML = rows.map(row => usageCard(row.label, row.usage)).join("");
+}
+
+function usageCard(label, usage) {
+  if (!usage) {
+    return `<article class="usage-item"><strong>${label}</strong><span>-</span><i><b style="width:0%"></b></i></article>`;
+  }
+
+  const used = Number(usage.today || 0);
+  const unlimited = usage.dailyLimit < 0;
+  const limitText = unlimited ? "نامحدود" : toPersianNumber(usage.dailyLimit);
+  const percent = unlimited ? 100 : Math.min(100, Math.round((used / Math.max(usage.dailyLimit, 1)) * 100));
+  return `
+    <article class="usage-item">
+      <strong>${label}</strong>
+      <span>${toPersianNumber(used)} / ${limitText}</span>
+      <i><b style="width:${percent}%"></b></i>
+    </article>
+  `;
 }
 
 function switchView(viewName) {
@@ -623,9 +663,11 @@ function saveSettings(event) {
   showToast("کلید ذخیره شد.");
 }
 
-async function redeemCode() {
+async function redeemCode(event) {
+  event.preventDefault();
   const code = elements.redeemCodeInput.value.trim();
   if (!code) return showToast("کد فعال‌سازی را وارد کن.");
+  setButtonLoading(elements.redeemCodeButton, true, "در حال فعال‌سازی...");
   try {
     await fetchJson("/api/access/redeem", {
       method: "POST",
@@ -636,6 +678,8 @@ async function redeemCode() {
     await loadAll();
   } catch (error) {
     showToast(error.message || "کد فعال نشد.");
+  } finally {
+    setButtonLoading(elements.redeemCodeButton, false, "فعال‌سازی کد");
   }
 }
 

@@ -20,6 +20,8 @@ const elements = {
   botEnabledInput: $("#botEnabledInput"),
   remindersEnabledInput: $("#remindersEnabledInput"),
   setWebhookButton: $("#setWebhookButton"),
+  botStatusButton: $("#botStatusButton"),
+  botStatusPanel: $("#botStatusPanel"),
   newPlanNameInput: $("#newPlanNameInput"),
   addPlanButton: $("#addPlanButton"),
   plansBoard: $("#plansBoard"),
@@ -37,6 +39,7 @@ elements.loginForm.addEventListener("submit", adminLogin);
 elements.logoutButton.addEventListener("click", logout);
 elements.settingsForm.addEventListener("submit", saveSettings);
 elements.setWebhookButton.addEventListener("click", setWebhook);
+elements.botStatusButton.addEventListener("click", loadBotStatus);
 elements.addPlanButton.addEventListener("click", addPlan);
 elements.createCodeButton.addEventListener("click", createCode);
 
@@ -83,14 +86,16 @@ function renderStats() {
 function renderSettings(payload) {
   const settings = payload.settings || {};
   const effective = payload.effectiveOpenRouter || {};
+  const telegram = payload.effectiveTelegram || {};
   elements.openRouterModelInput.value = settings.openRouterModel || effective.defaultModel || "";
   elements.openRouterRefererInput.value = settings.openRouterReferer || effective.referer || "";
-  elements.publicBaseUrlInput.value = settings.publicBaseUrl || "";
-  elements.miniAppUrlInput.value = settings.telegramMiniAppUrl || "";
-  elements.botUsernameInput.value = settings.telegramBotUsername || "";
+  elements.publicBaseUrlInput.value = settings.publicBaseUrl || telegram.publicBaseUrl || "";
+  elements.miniAppUrlInput.value = settings.telegramMiniAppUrl || telegram.telegramMiniAppUrl || "";
+  elements.botUsernameInput.value = settings.telegramBotUsername || telegram.telegramBotUsername || "";
   elements.reminderHourInput.value = settings.reminderHour ?? 9;
   elements.botEnabledInput.checked = settings.botEnabled ?? true;
   elements.remindersEnabledInput.checked = settings.remindersEnabled ?? true;
+  renderBotStatusSummary(telegram);
 }
 
 function renderPlans() {
@@ -220,8 +225,74 @@ async function saveSettings(event) {
 }
 
 async function setWebhook() {
-  const result = await adminFetch("/api/admin/bot/set-webhook", { method: "POST" });
-  showToast(result.ok ? "Webhook تنظیم شد." : result.message || "Webhook تنظیم نشد.");
+  setButtonLoading(elements.setWebhookButton, true, "در حال تنظیم...");
+  try {
+    const result = await adminFetch("/api/admin/bot/set-webhook", { method: "POST" });
+    showToast(result.ok ? "Webhook تنظیم شد." : result.message || "Webhook تنظیم نشد.");
+    await loadBotStatus();
+  } catch (error) {
+    showToast(error.message || "Webhook تنظیم نشد.");
+  } finally {
+    setButtonLoading(elements.setWebhookButton, false, "تنظیم Webhook ربات");
+  }
+}
+
+async function loadBotStatus() {
+  setButtonLoading(elements.botStatusButton, true, "در حال بررسی...");
+  try {
+    const result = await adminFetch("/api/admin/bot/status");
+    renderBotStatus(result);
+  } catch (error) {
+    elements.botStatusPanel.hidden = false;
+    elements.botStatusPanel.innerHTML = `<strong class="danger-text">وضعیت ربات خوانده نشد.</strong><span>${escapeHtml(error.message)}</span>`;
+  } finally {
+    setButtonLoading(elements.botStatusButton, false, "بررسی وضعیت ربات");
+  }
+}
+
+function renderBotStatusSummary(telegram) {
+  elements.botStatusPanel.hidden = false;
+  const tokenText = telegram.botTokenConfigured ? "توکن روی سرور تنظیم شده" : "توکن روی سرور تنظیم نشده";
+  elements.botStatusPanel.innerHTML = `
+    <div class="bot-status-grid">
+      <span><b>Webhook مورد انتظار</b><code>${escapeHtml(telegram.webhookUrl || "-")}</code></span>
+      <span><b>Mini App URL</b><code>${escapeHtml(telegram.telegramMiniAppUrl || "-")}</code></span>
+      <span><b>Bot Username</b><code>${escapeHtml(telegram.telegramBotUsername || "-")}</code></span>
+      <span class="${telegram.botTokenConfigured ? "ok-text" : "danger-text"}"><b>Token</b>${tokenText}</span>
+    </div>
+  `;
+}
+
+function renderBotStatus(result) {
+  elements.botStatusPanel.hidden = false;
+  if (!result.tokenConfigured) {
+    elements.botStatusPanel.innerHTML = `<strong class="danger-text">TELEGRAM_BOT_TOKEN تنظیم نشده است.</strong>`;
+    return;
+  }
+
+  const me = parseTelegramBody(result.me);
+  const webhook = parseTelegramBody(result.webhook);
+  const bot = me?.result || {};
+  const info = webhook?.result || {};
+  const expected = result.expectedWebhookUrl || "";
+  const actual = info.url || "";
+  const matches = expected && actual && normalizeUrl(expected) === normalizeUrl(actual);
+  const hasError = Boolean(info.last_error_message);
+
+  elements.botStatusPanel.innerHTML = `
+    <div class="bot-status-head">
+      <strong class="${result.ok && matches && !hasError ? "ok-text" : "warning-text"}">${result.ok ? "ربات قابل دسترسی است" : "ربات خطا دارد"}</strong>
+      <small>@${escapeHtml(bot.username || "-")} · id:${escapeHtml(bot.id || "-")}</small>
+    </div>
+    <div class="bot-status-grid">
+      <span><b>Webhook ثبت‌شده</b><code>${escapeHtml(actual || "-")}</code></span>
+      <span><b>Webhook مورد انتظار</b><code>${escapeHtml(expected || "-")}</code></span>
+      <span class="${matches ? "ok-text" : "danger-text"}"><b>تطابق URL</b>${matches ? "درست است" : "نیاز به تنظیم Webhook"}</span>
+      <span><b>آپدیت‌های مانده</b>${toPersianNumber(info.pending_update_count ?? 0)}</span>
+      <span class="${hasError ? "danger-text" : "ok-text"}"><b>خطای آخر</b>${escapeHtml(info.last_error_message || "ندارد")}</span>
+      <span><b>وضعیت getMe</b>${escapeHtml(result.me?.description || "ok")}</span>
+    </div>
+  `;
 }
 
 async function addPlan() {
@@ -408,6 +479,24 @@ function safeColor(value, fallback) {
 
 function slugify(value) {
   return value.toLowerCase().trim().replace(/[^a-z0-9\u0600-\u06ff]+/gi, "-").replace(/^-|-$/g, "") || "plan";
+}
+
+function parseTelegramBody(call) {
+  if (!call?.body) return null;
+  try {
+    return JSON.parse(call.body);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function setButtonLoading(button, loading, text) {
+  button.disabled = loading;
+  button.textContent = text;
 }
 
 function showToast(message) {

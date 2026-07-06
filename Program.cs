@@ -69,14 +69,16 @@ api.MapGet("/health/db", async (IAppStore store) =>
     return Results.Ok(new { status = "ok", database = store.ProviderName });
 });
 
-api.MapGet("/public-settings", async (IAppStore store) =>
+api.MapGet("/public-settings", async (HttpContext http, IConfiguration config, IAppStore store) =>
 {
     var settings = await store.GetSettingsAsync();
+    var publicBaseUrl = ResolvePublicBaseUrl(http, config, settings);
     return Results.Ok(new
     {
-        settings.TelegramBotUsername,
-        settings.TelegramMiniAppUrl,
-        settings.PublicBaseUrl
+        TelegramBotUsername = ResolveBotUsername(config, settings),
+        TelegramMiniAppUrl = ResolveMiniAppUrl(http, config, settings),
+        PublicBaseUrl = publicBaseUrl,
+        BotTokenConfigured = !string.IsNullOrWhiteSpace(config["TELEGRAM_BOT_TOKEN"])
     });
 });
 
@@ -504,7 +506,20 @@ admin.MapGet("/settings", async (HttpContext http, IConfiguration config, IAppSt
     if (!IsAdmin(http, config)) return Results.Unauthorized();
     var settings = await store.GetSettingsAsync();
     var openRouter = await OpenRouterOptions.FromAsync(config, store);
-    return Results.Ok(new { settings, effectiveOpenRouter = openRouter });
+    var publicBaseUrl = ResolvePublicBaseUrl(http, config, settings);
+    return Results.Ok(new
+    {
+        settings,
+        effectiveOpenRouter = openRouter,
+        effectiveTelegram = new
+        {
+            publicBaseUrl,
+            telegramMiniAppUrl = ResolveMiniAppUrl(http, config, settings),
+            telegramBotUsername = ResolveBotUsername(config, settings),
+            botTokenConfigured = !string.IsNullOrWhiteSpace(config["TELEGRAM_BOT_TOKEN"]),
+            webhookUrl = string.IsNullOrWhiteSpace(publicBaseUrl) ? string.Empty : $"{publicBaseUrl}/api/bot/webhook"
+        }
+    });
 });
 
 admin.MapPut("/settings", async (HttpContext http, IConfiguration config, UpdateSettingsRequest request, IAppStore store) =>
@@ -530,13 +545,31 @@ admin.MapPost("/bot/set-webhook", async (HttpContext http, IConfiguration config
 {
     if (!IsAdmin(http, config)) return Results.Unauthorized();
     var settings = await store.GetSettingsAsync();
-    var baseUrl = settings.PublicBaseUrl.TrimEnd('/');
+    var baseUrl = ResolvePublicBaseUrl(http, config, settings);
     if (string.IsNullOrWhiteSpace(baseUrl))
     {
-        return Results.BadRequest(new { message = "اول Public Base URL را در تنظیمات ادمین وارد کن." });
+        return Results.BadRequest(new { message = "Public Base URL مشخص نیست. دامنه اپ را در تنظیمات ادمین یا PUBLIC_BASE_URL وارد کن." });
+    }
+
+    if (string.IsNullOrWhiteSpace(settings.PublicBaseUrl) || string.IsNullOrWhiteSpace(settings.TelegramMiniAppUrl))
+    {
+        await store.UpdateSettingsAsync(current =>
+        {
+            if (string.IsNullOrWhiteSpace(current.PublicBaseUrl)) current.PublicBaseUrl = baseUrl;
+            if (string.IsNullOrWhiteSpace(current.TelegramMiniAppUrl)) current.TelegramMiniAppUrl = baseUrl;
+        });
     }
 
     return Results.Ok(await bot.SetWebhookAsync($"{baseUrl}/api/bot/webhook"));
+});
+
+admin.MapGet("/bot/status", async (HttpContext http, IConfiguration config, IAppStore store, TelegramBotService bot) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    var settings = await store.GetSettingsAsync();
+    var baseUrl = ResolvePublicBaseUrl(http, config, settings);
+    var webhookUrl = string.IsNullOrWhiteSpace(baseUrl) ? string.Empty : $"{baseUrl}/api/bot/webhook";
+    return Results.Ok(await bot.GetStatusAsync(webhookUrl));
 });
 
 app.Run();
@@ -579,6 +612,55 @@ static string? ResolveOpenRouterApiKey(HttpContext http, IConfiguration config)
     var apiKey = http.Request.Headers["X-OpenRouter-Api-Key"].FirstOrDefault();
     return string.IsNullOrWhiteSpace(apiKey) ? config["OPENROUTER_API_KEY"] : apiKey;
 }
+
+static string ResolvePublicBaseUrl(HttpContext http, IConfiguration config, AppSettingsState settings)
+{
+    var configured = FirstValue(
+        settings.PublicBaseUrl,
+        config["PUBLIC_BASE_URL"],
+        config["APP_PUBLIC_BASE_URL"],
+        config["CAPROVER_PUBLIC_URL"]);
+
+    if (!string.IsNullOrWhiteSpace(configured))
+    {
+        return CleanUrl(configured);
+    }
+
+    var forwardedHost = FirstHeaderPart(http.Request.Headers["X-Forwarded-Host"].FirstOrDefault());
+    var forwardedProto = FirstHeaderPart(http.Request.Headers["X-Forwarded-Proto"].FirstOrDefault());
+    var host = string.IsNullOrWhiteSpace(forwardedHost) ? http.Request.Host.Value : forwardedHost;
+    if (string.IsNullOrWhiteSpace(host)) return string.Empty;
+
+    var scheme = string.IsNullOrWhiteSpace(forwardedProto) ? http.Request.Scheme : forwardedProto;
+    if (scheme.Equals("http", StringComparison.OrdinalIgnoreCase) && !IsLocalHost(host))
+    {
+        scheme = "https";
+    }
+
+    return CleanUrl($"{scheme}://{host}");
+}
+
+static string ResolveMiniAppUrl(HttpContext http, IConfiguration config, AppSettingsState settings)
+{
+    var configured = FirstValue(settings.TelegramMiniAppUrl, config["TELEGRAM_MINI_APP_URL"]);
+    return string.IsNullOrWhiteSpace(configured) ? ResolvePublicBaseUrl(http, config, settings) : CleanUrl(configured);
+}
+
+static string ResolveBotUsername(IConfiguration config, AppSettingsState settings) =>
+    FirstValue(settings.TelegramBotUsername, config["TELEGRAM_BOT_USERNAME"])?.Trim().TrimStart('@') ?? string.Empty;
+
+static string? FirstValue(params string?[] values) =>
+    values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+
+static string FirstHeaderPart(string? value) =>
+    value?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? string.Empty;
+
+static string CleanUrl(string value) => value.Trim().TrimEnd('/');
+
+static bool IsLocalHost(string host) =>
+    host.StartsWith("localhost", StringComparison.OrdinalIgnoreCase)
+    || host.StartsWith("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+    || host.StartsWith("[::1]", StringComparison.OrdinalIgnoreCase);
 
 static CreateCardRequest NormalizeFeedbackRequest(CreateCardRequest request)
 {

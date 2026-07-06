@@ -49,17 +49,6 @@
       </div>
     </section>
 
-    <section class="account-strip">
-      <div>
-        <small>وضعیت</small>
-        <strong id="accountStatusText">در حال بارگذاری</strong>
-      </div>
-      <div>
-        <small>مدل</small>
-        <strong class="mixed" id="modelText">-</strong>
-      </div>
-    </section>
-
     <section class="stats-grid" aria-label="آمار">
       <article class="stat strong">
         <small>مرور امروز</small>
@@ -220,28 +209,43 @@
         <div class="profile-grid">
           <div><small>کاربر</small><strong class="mixed" id="userIdText">-</strong></div>
           <div><small>پلن</small><strong id="userPlanText">-</strong></div>
+          <div><small>وضعیت</small><strong id="accountStatusText">در حال بارگذاری</strong></div>
+          <div><small>مدل AI</small><strong class="mixed" id="modelText">-</strong></div>
           <div><small>ذخیره‌سازی</small><strong id="storageProviderText">-</strong></div>
           <div><small>دسترسی‌ها</small><strong id="userFeaturesText">-</strong></div>
         </div>
       </article>
 
-      <form class="panel settings-form" id="settingsForm">
+      <article class="panel account-report">
         <div class="panel-title">
-          <strong>کلید و کد فعال‌سازی</strong>
-          <span>اگر کلید روی سرور نیست، کلید OpenRouter خودت را فقط در همین دستگاه ذخیره کن. کد فعال‌سازی پلن را هم همینجا وارد کن.</span>
+          <strong>گزارش امروز</strong>
+          <span id="dailyReportText">بعد از بارگذاری، مصرف امروز و سقف پلن اینجا نمایش داده می‌شود.</span>
+        </div>
+        <div class="usage-grid" id="usageGrid"></div>
+      </article>
+
+      <form class="panel settings-form activation-form" id="activationForm">
+        <div class="panel-title">
+          <strong>فعال‌سازی پلن</strong>
+          <span>اگر از ادمین کد گرفته‌ای، اینجا وارد کن تا پلن و دسترسی‌ها روی همین اکانت فعال شود.</span>
+        </div>
+        <label>
+          <span>کد فعال‌سازی</span>
+          <input class="mixed-input" id="redeemCodeInput" autocomplete="off" placeholder="LL-...">
+        </label>
+        <button class="primary-button" id="redeemCodeButton" type="submit">فعال‌سازی کد</button>
+      </form>
+
+      <form class="panel settings-form api-key-form" id="apiKeyForm">
+        <div class="panel-title">
+          <strong>کلید OpenRouter همین دستگاه</strong>
+          <span>اگر کلید روی سرور تنظیم شده باشد نیازی به این بخش نیست. این کلید فقط در مرورگر همین دستگاه ذخیره می‌شود.</span>
         </div>
         <label>
           <span>OpenRouter API Key</span>
           <input class="mixed-input" id="apiKeyInput" type="password" autocomplete="off" placeholder="sk-or-v1-...">
         </label>
-        <label>
-          <span>کد فعال‌سازی</span>
-          <input class="mixed-input" id="redeemCodeInput" autocomplete="off" placeholder="LL-...">
-        </label>
-        <div class="tool-row">
-          <button class="primary-button" type="submit">ذخیره کلید</button>
-          <button class="secondary-button" id="redeemCodeButton" type="button">فعال‌سازی کد</button>
-        </div>
+        <button class="secondary-button" type="submit">ذخیره کلید روی دستگاه</button>
       </form>
 
       <article class="panel">

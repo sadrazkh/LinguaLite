@@ -577,6 +577,64 @@ body.auth-required .view {
   line-height: 1.65;
 }
 
+.account-report {
+  border-color: color-mix(in srgb, var(--primary), var(--line) 50%);
+}
+
+.usage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.usage-item {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.usage-item strong,
+.usage-item span {
+  overflow-wrap: anywhere;
+}
+
+.usage-item strong {
+  font-size: 0.82rem;
+}
+
+.usage-item span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+}
+
+.usage-item i {
+  display: block;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.usage-item b {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+
+.activation-form {
+  border-color: color-mix(in srgb, var(--success), var(--line) 45%);
+}
+
+.api-key-form {
+  border-color: color-mix(in srgb, var(--warning), var(--line) 50%);
+}
+
 .file-button {
   min-height: 48px;
   display: grid;
@@ -980,6 +1038,7 @@ body.auth-required .view {
   .tool-row,
   .form-actions,
   .profile-grid,
+  .usage-grid,
   .definition-grid,
   .correction-compare,
   .issue-lines {

@@ -31,6 +31,14 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
             chatId));
 
         var command = text.Trim();
+        if (command.StartsWith("/start login", StringComparison.OrdinalIgnoreCase)
+            || command.StartsWith("/start=login", StringComparison.OrdinalIgnoreCase)
+            || command.StartsWith("/login", StringComparison.OrdinalIgnoreCase))
+        {
+            await SendBrowserLoginCodeAsync(profile, chatId, settings);
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(command) || command.StartsWith("/start", StringComparison.OrdinalIgnoreCase))
         {
             await SendMessageAsync(chatId, StartText(profile), settings);
@@ -46,12 +54,6 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
         if (command.StartsWith("/status", StringComparison.OrdinalIgnoreCase))
         {
             await SendStatusAsync(profile, chatId, settings);
-            return;
-        }
-
-        if (command.StartsWith("/login", StringComparison.OrdinalIgnoreCase))
-        {
-            await SendBrowserLoginCodeAsync(profile, chatId, settings);
             return;
         }
 
@@ -99,16 +101,56 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
         var token = configuration["TELEGRAM_BOT_TOKEN"];
         if (string.IsNullOrWhiteSpace(token))
         {
-            return new { ok = false, message = "TELEGRAM_BOT_TOKEN تنظیم نشده است." };
+            return new { ok = false, webhookUrl, message = "TELEGRAM_BOT_TOKEN تنظیم نشده است." };
         }
 
         using var response = await httpClient.PostAsJsonAsync($"https://api.telegram.org/bot{token}/setWebhook", new
         {
             url = webhookUrl,
-            allowed_updates = new[] { "message" }
+            allowed_updates = new[] { "message" },
+            drop_pending_updates = false
         });
+
         var body = await response.Content.ReadAsStringAsync();
-        return new { ok = response.IsSuccessStatusCode, status = (int)response.StatusCode, body };
+        var telegramOk = IsTelegramOk(body);
+        var commands = await SetMyCommandsAsync(token);
+
+        return new
+        {
+            ok = response.IsSuccessStatusCode && telegramOk,
+            status = (int)response.StatusCode,
+            webhookUrl,
+            message = telegramOk ? "Webhook ربات تنظیم شد." : TelegramDescription(body),
+            body,
+            commands
+        };
+    }
+
+    public async Task<object> GetStatusAsync(string expectedWebhookUrl)
+    {
+        var token = configuration["TELEGRAM_BOT_TOKEN"];
+        if (string.IsNullOrWhiteSpace(token))
+        {
+            return new
+            {
+                ok = false,
+                expectedWebhookUrl,
+                tokenConfigured = false,
+                message = "TELEGRAM_BOT_TOKEN تنظیم نشده است."
+            };
+        }
+
+        var me = await TelegramGetAsync(token, "getMe");
+        var webhook = await TelegramGetAsync(token, "getWebhookInfo");
+
+        return new
+        {
+            ok = me.Ok && webhook.Ok,
+            expectedWebhookUrl,
+            tokenConfigured = true,
+            me,
+            webhook
+        };
     }
 
     public async Task SendReminderAsync(UserProfile user, int dueCount, AppSettingsState settings)
@@ -118,7 +160,7 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
     }
 
     private static string StartText(UserProfile profile) =>
-        $"سلام {profile.DisplayName}!\nاکانتت وصل شد و کارت‌ها با همین شناسه تلگرام ذخیره می‌شوند.\nبرای ورود به نسخه مرورگر یا PWA دستور /login را بزن.";
+        $"سلام {profile.DisplayName}!\nاکانتت به LinguaLite وصل شد و کارت‌ها با همین شناسه تلگرام ذخیره می‌شوند.\nبرای ورود به نسخه مرورگر یا PWA دستور /login را بزن.";
 
     private static string HelpText() => """
         فرمان‌های ربات:
@@ -154,7 +196,7 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
     {
         var code = await store.CreateBrowserLoginCodeAsync(profile.Id, TimeSpan.FromMinutes(10));
         await SendMessageAsync(chatId,
-            $"کد ورود به نسخه مرورگر/PWA:\n{code.Code}\nاین کد ۱۰ دقیقه اعتبار دارد و یک‌بار مصرف است.",
+            $"کد ورود به نسخه مرورگر/PWA:\n{code.Code}\nاین کد ۱۰ دقیقه اعتبار دارد و یک‌بارمصرف است.",
             settings);
     }
 
@@ -246,11 +288,81 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
                 }
             };
 
-        await httpClient.PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage", new
+        using var response = await httpClient.PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage", new
         {
             chat_id = chatId,
             text,
             reply_markup = replyMarkup
         });
+
+        var body = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode || !IsTelegramOk(body))
+        {
+            throw new InvalidOperationException($"Telegram sendMessage failed: {TelegramDescription(body)}");
+        }
+    }
+
+    private async Task<TelegramApiRawResult> SetMyCommandsAsync(string token)
+    {
+        using var response = await httpClient.PostAsJsonAsync($"https://api.telegram.org/bot{token}/setMyCommands", new
+        {
+            commands = new[]
+            {
+                new { command = "start", description = "شروع و اتصال اکانت" },
+                new { command = "login", description = "کد ورود PWA و مرورگر" },
+                new { command = "status", description = "وضعیت اکانت" },
+                new { command = "due", description = "کارت‌های آماده مرور" },
+                new { command = "remind_on", description = "روشن کردن یادآوری" },
+                new { command = "remind_off", description = "خاموش کردن یادآوری" }
+            }
+        });
+
+        return await ReadRawTelegramResultAsync(response);
+    }
+
+    private async Task<TelegramApiRawResult> TelegramGetAsync(string token, string method)
+    {
+        using var response = await httpClient.GetAsync($"https://api.telegram.org/bot{token}/{method}");
+        return await ReadRawTelegramResultAsync(response);
+    }
+
+    private static async Task<TelegramApiRawResult> ReadRawTelegramResultAsync(HttpResponseMessage response)
+    {
+        var body = await response.Content.ReadAsStringAsync();
+        var ok = response.IsSuccessStatusCode && IsTelegramOk(body);
+        return new TelegramApiRawResult(ok, (int)response.StatusCode, body, TelegramDescription(body));
+    }
+
+    private static bool IsTelegramOk(string body)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return document.RootElement.TryGetProperty("ok", out var ok) && ok.ValueKind == JsonValueKind.True;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string TelegramDescription(string body)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            if (document.RootElement.TryGetProperty("description", out var description))
+            {
+                return description.GetString() ?? body;
+            }
+        }
+        catch
+        {
+            return body;
+        }
+
+        return body;
     }
 }
+
+public sealed record TelegramApiRawResult(bool Ok, int Status, string Body, string Description);

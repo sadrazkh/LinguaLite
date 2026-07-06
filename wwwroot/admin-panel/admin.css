@@ -97,6 +97,73 @@
   color: var(--danger);
 }
 
+.bot-status-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-2);
+}
+
+.bot-status-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.bot-status-head small {
+  color: var(--muted);
+  direction: ltr;
+  unicode-bidi: plaintext;
+}
+
+.bot-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.bot-status-grid span {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.bot-status-grid b {
+  color: var(--muted);
+}
+
+.bot-status-grid code {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: plaintext;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.ok-text {
+  color: var(--success) !important;
+}
+
+.warning-text {
+  color: var(--warning) !important;
+}
+
+.danger-text {
+  color: var(--danger) !important;
+}
+
 .plans-board {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -252,6 +319,7 @@
 
   .admin-row,
   .settings-grid,
+  .bot-status-grid,
   .plan-actions,
   .plans-board,
   .admin-stats,
