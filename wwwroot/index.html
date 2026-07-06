@@ -3,7 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2481cc">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="LinguaLite">
   <title>LinguaLite</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -25,6 +30,24 @@
         <button class="icon-button" id="refreshButton" type="button" aria-label="تازه‌سازی">↻</button>
       </div>
     </header>
+
+    <section class="auth-gate" id="authGate" hidden>
+      <div class="auth-card">
+        <div class="panel-title">
+          <strong>ورود به اکانت تلگرام</strong>
+          <span>برای نسخه مرورگر و PWA یک بار ربات را start کن، دستور /login را بزن و کد را اینجا وارد کن.</span>
+        </div>
+        <a class="primary-button auth-bot-link" id="openBotButton" href="https://t.me/" target="_blank" rel="noreferrer">باز کردن ربات</a>
+        <form id="browserLoginForm" class="browser-login-form">
+          <label>
+            <span>کد ورود یک‌بارمصرف</span>
+            <input class="mixed-input" id="browserLoginCodeInput" autocomplete="one-time-code" inputmode="numeric" placeholder="123456">
+          </label>
+          <button class="secondary-button" id="browserLoginButton" type="submit">اتصال اکانت</button>
+        </form>
+        <p class="auth-note" id="authHelpText">اگر داخل تلگرام باز کرده‌ای و این صفحه را می‌بینی، Mini App URL یا Bot Token را در ادمین بررسی کن.</p>
+      </div>
+    </section>
 
     <section class="account-strip">
       <div>

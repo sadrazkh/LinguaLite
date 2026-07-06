@@ -1,0 +1,20 @@
+{
+  "name": "LinguaLite",
+  "short_name": "LinguaLite",
+  "description": "Leitner language learning with Telegram sync",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "dir": "rtl",
+  "lang": "fa",
+  "background_color": "#f4f7fb",
+  "theme_color": "#2481cc",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

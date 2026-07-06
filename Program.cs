@@ -69,12 +69,30 @@ api.MapGet("/health/db", async (IAppStore store) =>
     return Results.Ok(new { status = "ok", database = store.ProviderName });
 });
 
+api.MapGet("/public-settings", async (IAppStore store) =>
+{
+    var settings = await store.GetSettingsAsync();
+    return Results.Ok(new
+    {
+        settings.TelegramBotUsername,
+        settings.TelegramMiniAppUrl,
+        settings.PublicBaseUrl
+    });
+});
+
+api.MapPost("/auth/browser-login", async (BrowserLoginRequest request, IAppStore store) =>
+{
+    var result = await store.RedeemBrowserLoginCodeAsync(request.Code);
+    return result.Success
+        ? Results.Ok(new { result.SessionToken, result.Profile })
+        : Results.BadRequest(new { message = result.Message });
+});
+
 api.MapGet("/config", async (HttpContext http, IConfiguration config, IAppStore store) =>
 {
-    var user = TelegramUserResolver.Resolve(http, config);
-    if (!user.IsAuthorized) return Results.Unauthorized();
+    var profile = await RequireUserAsync(http, config, store);
+    if (profile is null) return Results.Unauthorized();
 
-    var profile = await store.GetOrCreateUserAsync(user);
     var settings = await store.GetSettingsAsync();
     var openRouter = await OpenRouterOptions.FromAsync(config, store);
     var plan = await store.GetEffectivePlanAsync(profile.Plan);
@@ -175,6 +193,7 @@ api.MapPost("/cards", async (HttpContext http, IConfiguration config, CreateCard
     };
 
     await store.AddCardAsync(profile.Id, card);
+    await store.RecordActivityAsync(profile.Id, ActivityKind.CardAdded);
     return Results.Created($"/api/cards/{card.Id}", FeedbackCardPresenter.ToReviewShape(card));
 });
 
@@ -246,9 +265,10 @@ api.MapPost("/cards/{id:guid}/review", async (
         item.NextReviewAt = now.Add(LeitnerSchedule.DelayFor(item.Box));
     });
 
-    return card is null
-        ? Results.NotFound(new { message = "کارت پیدا نشد." })
-        : Results.Ok(card);
+    if (card is null) return Results.NotFound(new { message = "کارت پیدا نشد." });
+
+    await store.RecordActivityAsync(profile.Id, ActivityKind.Review);
+    return Results.Ok(card);
 });
 
 api.MapDelete("/cards/{id:guid}", async (HttpContext http, IConfiguration config, Guid id, IAppStore store) =>
@@ -284,6 +304,7 @@ api.MapPost("/import", async (HttpContext http, IConfiguration config, ImportReq
     }
 
     var count = await store.ImportCardsAsync(profile.Id, request.Cards, request.Mode);
+    await store.RecordActivityAsync(profile.Id, ActivityKind.CardAdded, count);
     return Results.Ok(new { imported = count });
 });
 
@@ -326,6 +347,7 @@ api.MapPost("/ai/complete", async (AiCompleteRequest request, HttpContext http, 
     }
 
     var card = NormalizeFeedbackRequest(await ai.CompleteAsync(request, apiKey));
+    await store.RecordActivityAsync(profile.Id, ActivityKind.AiCard);
     return Results.Ok(card);
 });
 
@@ -355,7 +377,9 @@ api.MapPost("/ai/dictionary", async (DictionaryRequest request, HttpContext http
         return Results.Json(new { message = quota.Message, usage = quota }, statusCode: StatusCodes.Status429TooManyRequests);
     }
 
-    return Results.Ok(await ai.LookupDictionaryAsync(request, apiKey));
+    var result = await ai.LookupDictionaryAsync(request, apiKey);
+    await store.RecordActivityAsync(profile.Id, ActivityKind.AiDictionary);
+    return Results.Ok(result);
 });
 
 api.MapPost("/ai/correction", async (CorrectionRequest request, HttpContext http, IConfiguration config, IAppStore store, OpenRouterCardService ai) =>
@@ -384,7 +408,9 @@ api.MapPost("/ai/correction", async (CorrectionRequest request, HttpContext http
         return Results.Json(new { message = quota.Message, usage = quota }, statusCode: StatusCodes.Status429TooManyRequests);
     }
 
-    return Results.Ok(await ai.CorrectTextAsync(request, apiKey));
+    var result = await ai.CorrectTextAsync(request, apiKey);
+    await store.RecordActivityAsync(profile.Id, ActivityKind.AiCorrection);
+    return Results.Ok(result);
 });
 
 api.MapPost("/bot/webhook", async (JsonElement update, TelegramBotService bot) =>
@@ -399,6 +425,12 @@ admin.MapGet("/users", async (HttpContext http, IConfiguration config, IAppStore
 {
     if (!IsAdmin(http, config)) return Results.Unauthorized();
     return Results.Ok(await store.GetUsersAsync());
+});
+
+admin.MapGet("/user-metrics", async (HttpContext http, IConfiguration config, IAppStore store) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    return Results.Ok(await store.GetAdminUserMetricsAsync());
 });
 
 admin.MapPut("/users/{id}", async (HttpContext http, IConfiguration config, string id, AdminUpdateUserRequest request, IAppStore store) =>
@@ -511,11 +543,25 @@ app.Run();
 
 static async Task<UserProfile?> RequireUserAsync(HttpContext http, IConfiguration config, IAppStore store)
 {
+    var sessionToken = http.Request.Headers["X-Session-Token"].FirstOrDefault();
+    if (!string.IsNullOrWhiteSpace(sessionToken))
+    {
+        var sessionProfile = await store.GetUserBySessionTokenAsync(sessionToken);
+        if (sessionProfile is not null && sessionProfile.IsActive)
+        {
+            await store.RecordActivityAsync(sessionProfile.Id, ActivityKind.Seen);
+            return sessionProfile;
+        }
+    }
+
     var identity = TelegramUserResolver.Resolve(http, config);
     if (!identity.IsAuthorized) return null;
 
     var profile = await store.GetOrCreateUserAsync(identity);
-    return profile.IsActive ? profile : null;
+    if (!profile.IsActive) return null;
+
+    await store.RecordActivityAsync(profile.Id, ActivityKind.Seen);
+    return profile;
 }
 
 static bool IsAdmin(HttpContext http, IConfiguration config)

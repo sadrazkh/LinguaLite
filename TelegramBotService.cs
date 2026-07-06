@@ -49,6 +49,12 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
             return;
         }
 
+        if (command.StartsWith("/login", StringComparison.OrdinalIgnoreCase))
+        {
+            await SendBrowserLoginCodeAsync(profile, chatId, settings);
+            return;
+        }
+
         if (command.StartsWith("/due", StringComparison.OrdinalIgnoreCase))
         {
             await SendDueAsync(profile, chatId, settings);
@@ -112,11 +118,12 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
     }
 
     private static string StartText(UserProfile profile) =>
-        $"سلام {profile.DisplayName}!\nاکانتت وصل شد و کارت‌ها با همین شناسه تلگرام ذخیره می‌شوند.\nبرای دیدن فرمان‌ها /help را بزن یا مینی‌اپ را باز کن.";
+        $"سلام {profile.DisplayName}!\nاکانتت وصل شد و کارت‌ها با همین شناسه تلگرام ذخیره می‌شوند.\nبرای ورود به نسخه مرورگر یا PWA دستور /login را بزن.";
 
     private static string HelpText() => """
         فرمان‌های ربات:
         /status وضعیت اکانت
+        /login کد ورود PWA و مرورگر
         /due کارت‌های آماده مرور
         /code LL-XXXX فعال‌سازی کد پلن
         /remind_on روشن کردن یادآوری
@@ -140,6 +147,14 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
         var dueCount = deck.Cards.Count(card => card.NextReviewAt <= DateTimeOffset.UtcNow);
         await SendMessageAsync(chatId,
             dueCount == 0 ? "فعلا کارت آماده مرور نداری." : $"امروز {dueCount} کارت برای مرور داری.",
+            settings);
+    }
+
+    private async Task SendBrowserLoginCodeAsync(UserProfile profile, long chatId, AppSettingsState settings)
+    {
+        var code = await store.CreateBrowserLoginCodeAsync(profile.Id, TimeSpan.FromMinutes(10));
+        await SendMessageAsync(chatId,
+            $"کد ورود به نسخه مرورگر/PWA:\n{code.Code}\nاین کد ۱۰ دقیقه اعتبار دارد و یک‌بار مصرف است.",
             settings);
     }
 
@@ -177,6 +192,7 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
             NextReviewAt = DateTimeOffset.UtcNow,
             Notes = "Added from Telegram bot"
         });
+        await store.RecordActivityAsync(profile.Id, ActivityKind.CardAdded);
         await SendMessageAsync(chatId, "کارت لغت اضافه شد.", settings);
     }
 
@@ -204,6 +220,7 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
             CreatedAt = DateTimeOffset.UtcNow,
             NextReviewAt = DateTimeOffset.UtcNow
         });
+        await store.RecordActivityAsync(profile.Id, ActivityKind.CardAdded);
         await SendMessageAsync(chatId, "کارت فیدبک اضافه شد.", settings);
     }
 

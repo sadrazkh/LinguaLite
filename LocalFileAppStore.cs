@@ -305,6 +305,121 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         });
     }
 
+    public async Task<BrowserLoginCode> CreateBrowserLoginCodeAsync(string userId, TimeSpan ttl)
+    {
+        return await MutateAsync(db =>
+        {
+            var code = new BrowserLoginCode
+            {
+                Code = GenerateNumericCode(),
+                UserId = userId,
+                CreatedAt = DateTimeOffset.UtcNow,
+                ExpiresAt = DateTimeOffset.UtcNow.Add(ttl)
+            };
+            db.BrowserLoginCodes.RemoveAll(item => item.UserId == userId || item.ExpiresAt <= DateTimeOffset.UtcNow || item.UsedAt.HasValue);
+            db.BrowserLoginCodes.Add(code);
+            return code;
+        });
+    }
+
+    public async Task<BrowserLoginResult> RedeemBrowserLoginCodeAsync(string codeText)
+    {
+        return await MutateAsync(db =>
+        {
+            var normalized = NormalizeLoginCode(codeText);
+            var code = db.BrowserLoginCodes.FirstOrDefault(item => item.Code == normalized && !item.UsedAt.HasValue);
+            if (code is null) return BrowserLoginResult.Fail("کد ورود پیدا نشد.");
+            if (code.ExpiresAt <= DateTimeOffset.UtcNow) return BrowserLoginResult.Fail("کد ورود منقضی شده است. از ربات یک کد جدید بگیر.");
+            if (!db.Users.TryGetValue(code.UserId, out var user)) return BrowserLoginResult.Fail("اکانت تلگرام پیدا نشد.");
+
+            code.UsedAt = DateTimeOffset.UtcNow;
+            var token = GenerateSessionToken();
+            db.BrowserSessions.Add(new LocalBrowserSession
+            {
+                TokenHash = HashToken(token),
+                UserId = user.Id,
+                CreatedAt = DateTimeOffset.UtcNow,
+                LastSeenAt = DateTimeOffset.UtcNow
+            });
+            return BrowserLoginResult.Ok(token, user);
+        });
+    }
+
+    public async Task<UserProfile?> GetUserBySessionTokenAsync(string sessionToken)
+    {
+        if (string.IsNullOrWhiteSpace(sessionToken)) return null;
+        return await MutateAsync(db =>
+        {
+            var hash = HashToken(sessionToken);
+            var session = db.BrowserSessions.FirstOrDefault(item => item.TokenHash == hash);
+            if (session is null) return null;
+            if (!db.Users.TryGetValue(session.UserId, out var user)) return null;
+
+            session.LastSeenAt = DateTimeOffset.UtcNow;
+            user.LastSeenAt = DateTimeOffset.UtcNow;
+            return user;
+        });
+    }
+
+    public async Task RecordActivityAsync(string userId, ActivityKind kind, int count = 1)
+    {
+        await MutateAsync(db =>
+        {
+            var activity = GetTodayActivity(db, userId);
+            var now = DateTimeOffset.UtcNow;
+            activity.LastSeenAt = now;
+            activity.FirstSeenAt = activity.FirstSeenAt == default ? now : activity.FirstSeenAt;
+            var safeCount = Math.Max(1, count);
+            switch (kind)
+            {
+                case ActivityKind.CardAdded:
+                    activity.CardsAdded += safeCount;
+                    break;
+                case ActivityKind.Review:
+                    activity.Reviews += safeCount;
+                    break;
+                case ActivityKind.AiCard:
+                    activity.AiCard += safeCount;
+                    break;
+                case ActivityKind.AiDictionary:
+                    activity.AiDictionary += safeCount;
+                    break;
+                case ActivityKind.AiCorrection:
+                    activity.AiCorrection += safeCount;
+                    break;
+                default:
+                    activity.Requests += safeCount;
+                    break;
+            }
+            return true;
+        });
+    }
+
+    public async Task<List<AdminUserMetrics>> GetAdminUserMetricsAsync()
+    {
+        var db = await LoadAsync();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        return db.Users.Keys.Select(userId =>
+        {
+            db.Decks.TryGetValue(userId, out var deck);
+            var activity = db.UserActivity.FirstOrDefault(item => item.UserId == userId && item.ActivityDate == today);
+            var dueCards = deck?.Cards.Count(card => card.NextReviewAt <= DateTimeOffset.UtcNow) ?? 0;
+            return new AdminUserMetrics
+            {
+                UserId = userId,
+                TotalCards = deck?.Cards.Count ?? 0,
+                DueCards = dueCards,
+                RequestsToday = activity?.Requests ?? 0,
+                ActiveMinutesToday = ActiveMinutes(activity),
+                CardsAddedToday = activity?.CardsAdded ?? 0,
+                ReviewsToday = activity?.Reviews ?? 0,
+                AiCardToday = activity?.AiCard ?? 0,
+                AiDictionaryToday = activity?.AiDictionary ?? 0,
+                AiCorrectionToday = activity?.AiCorrection ?? 0
+            };
+        }).ToList();
+    }
+
     public async Task<AppSettingsState> GetSettingsAsync()
     {
         var db = await LoadAsync();
@@ -394,6 +509,32 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         return $"LL-{Convert.ToHexString(bytes)}";
     }
 
+    private static string GenerateNumericCode()
+    {
+        Span<byte> bytes = stackalloc byte[4];
+        RandomNumberGenerator.Fill(bytes);
+        var value = BitConverter.ToUInt32(bytes) % 1_000_000;
+        return value.ToString("D6");
+    }
+
+    private static string GenerateSessionToken()
+    {
+        Span<byte> bytes = stackalloc byte[32];
+        RandomNumberGenerator.Fill(bytes);
+        return Convert.ToBase64String(bytes).Replace("+", "-").Replace("/", "_").TrimEnd('=');
+    }
+
+    private static string HashToken(string token)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(token.Trim());
+        return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    }
+
+    private static string NormalizeLoginCode(string value)
+    {
+        return new string((value ?? string.Empty).Where(char.IsDigit).ToArray());
+    }
+
     private static void EnsurePlans(LocalAppDatabase db)
     {
         if (db.Plans.Count > 0) return;
@@ -451,6 +592,30 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         _ => plan.AiMonthlyLimit
     };
 
+    private static LocalUserActivity GetTodayActivity(LocalAppDatabase db, string userId)
+    {
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var activity = db.UserActivity.FirstOrDefault(item => item.UserId == userId && item.ActivityDate == today);
+        if (activity is not null) return activity;
+
+        activity = new LocalUserActivity
+        {
+            UserId = userId,
+            ActivityDate = today,
+            FirstSeenAt = DateTimeOffset.UtcNow,
+            LastSeenAt = DateTimeOffset.UtcNow
+        };
+        db.UserActivity.Add(activity);
+        return activity;
+    }
+
+    private static int ActiveMinutes(LocalUserActivity? activity)
+    {
+        if (activity is null) return 0;
+        var minutes = (int)Math.Ceiling((activity.LastSeenAt - activity.FirstSeenAt).TotalMinutes);
+        return activity.Requests > 0 ? Math.Max(1, minutes) : Math.Max(0, minutes);
+    }
+
     private sealed class LocalAppDatabase
     {
         public Dictionary<string, UserProfile> Users { get; set; } = [];
@@ -458,6 +623,9 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         public Dictionary<string, AccessCode> AccessCodes { get; set; } = [];
         public List<PlanDefinition> Plans { get; set; } = [];
         public List<LocalAiUsage> AiUsage { get; set; } = [];
+        public List<BrowserLoginCode> BrowserLoginCodes { get; set; } = [];
+        public List<LocalBrowserSession> BrowserSessions { get; set; } = [];
+        public List<LocalUserActivity> UserActivity { get; set; } = [];
         public AppSettingsState Settings { get; set; } = new();
     }
 
@@ -467,5 +635,27 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         public string Tool { get; set; } = "card";
         public DateOnly UsageDate { get; set; }
         public int Count { get; set; }
+    }
+
+    private sealed class LocalBrowserSession
+    {
+        public string TokenHash { get; set; } = string.Empty;
+        public string UserId { get; set; } = string.Empty;
+        public DateTimeOffset CreatedAt { get; set; }
+        public DateTimeOffset LastSeenAt { get; set; }
+    }
+
+    private sealed class LocalUserActivity
+    {
+        public string UserId { get; set; } = string.Empty;
+        public DateOnly ActivityDate { get; set; }
+        public DateTimeOffset FirstSeenAt { get; set; }
+        public DateTimeOffset LastSeenAt { get; set; }
+        public int Requests { get; set; }
+        public int CardsAdded { get; set; }
+        public int Reviews { get; set; }
+        public int AiCard { get; set; }
+        public int AiDictionary { get; set; }
+        public int AiCorrection { get; set; }
     }
 }

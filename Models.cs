@@ -101,11 +101,44 @@ public sealed class AiUsageSummary
     public string Message { get; set; } = string.Empty;
 }
 
+public sealed class BrowserLoginCode
+{
+    public string Code { get; set; } = string.Empty;
+    public string UserId { get; set; } = string.Empty;
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset ExpiresAt { get; set; }
+    public DateTimeOffset? UsedAt { get; set; }
+}
+
+public sealed class AdminUserMetrics
+{
+    public string UserId { get; set; } = string.Empty;
+    public int TotalCards { get; set; }
+    public int DueCards { get; set; }
+    public int RequestsToday { get; set; }
+    public int ActiveMinutesToday { get; set; }
+    public int CardsAddedToday { get; set; }
+    public int ReviewsToday { get; set; }
+    public int AiCardToday { get; set; }
+    public int AiDictionaryToday { get; set; }
+    public int AiCorrectionToday { get; set; }
+}
+
 public enum AiToolKind
 {
     Card,
     Dictionary,
     Correction
+}
+
+public enum ActivityKind
+{
+    Seen,
+    CardAdded,
+    Review,
+    AiCard,
+    AiDictionary,
+    AiCorrection
 }
 
 public sealed class AppSettingsState
@@ -216,6 +249,12 @@ public sealed record ReviewRequest(bool Remembered);
 public sealed record ImportRequest(List<FlashCard> Cards, ImportMode Mode = ImportMode.Merge);
 public sealed record ExportPayload(string UserId, DateTimeOffset ExportedAt, List<FlashCard> Cards);
 public sealed record RedeemCodeRequest(string Code);
+public sealed record BrowserLoginRequest(string Code);
+public sealed record BrowserLoginResult(bool Success, string Message, string SessionToken, UserProfile? Profile)
+{
+    public static BrowserLoginResult Ok(string sessionToken, UserProfile profile) => new(true, string.Empty, sessionToken, profile);
+    public static BrowserLoginResult Fail(string message) => new(false, message, string.Empty, null);
+}
 public sealed record AdminUpdateUserRequest(bool? IsActive, string? Plan, FeatureSet? Features, bool? RemindersEnabled, int? ReminderHour);
 public sealed record CreateAccessCodeRequest(string? Code, string? Plan, FeatureSet? Features, int? MaxUses);
 public sealed record UpdateCardRequest(string Front, string Back, string? Example, string? Prompt, string? Answer, string? Notes, CardType Type = CardType.Word);

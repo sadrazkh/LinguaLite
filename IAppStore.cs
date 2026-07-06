@@ -19,6 +19,11 @@ public interface IAppStore
     Task<PlanDefinition> GetEffectivePlanAsync(string planName);
     Task<AiUsageSummary> GetAiUsageAsync(string userId, string planName, AiToolKind tool);
     Task<AiUsageSummary> TryConsumeAiRequestAsync(string userId, string planName, AiToolKind tool);
+    Task<BrowserLoginCode> CreateBrowserLoginCodeAsync(string userId, TimeSpan ttl);
+    Task<BrowserLoginResult> RedeemBrowserLoginCodeAsync(string codeText);
+    Task<UserProfile?> GetUserBySessionTokenAsync(string sessionToken);
+    Task RecordActivityAsync(string userId, ActivityKind kind, int count = 1);
+    Task<List<AdminUserMetrics>> GetAdminUserMetricsAsync();
     Task<AppSettingsState> GetSettingsAsync();
     Task<AppSettingsState> UpdateSettingsAsync(Action<AppSettingsState> update);
     Task MarkReminderSentAsync(string userId, DateTimeOffset sentAt);

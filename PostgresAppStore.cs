@@ -120,6 +120,39 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                     PRIMARY KEY (user_id, tool, usage_date)
                 );
 
+                CREATE TABLE IF NOT EXISTS app_browser_login_codes (
+                    code text PRIMARY KEY,
+                    user_id text NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+                    created_at timestamptz NOT NULL,
+                    expires_at timestamptz NOT NULL,
+                    used_at timestamptz NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_browser_login_codes_user ON app_browser_login_codes(user_id);
+
+                CREATE TABLE IF NOT EXISTS app_browser_sessions (
+                    token_hash text PRIMARY KEY,
+                    user_id text NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+                    created_at timestamptz NOT NULL,
+                    last_seen_at timestamptz NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS ix_browser_sessions_user ON app_browser_sessions(user_id);
+
+                CREATE TABLE IF NOT EXISTS app_user_daily_activity (
+                    user_id text NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+                    activity_date date NOT NULL,
+                    first_seen_at timestamptz NOT NULL,
+                    last_seen_at timestamptz NOT NULL,
+                    request_count integer NOT NULL DEFAULT 0,
+                    cards_added integer NOT NULL DEFAULT 0,
+                    reviews integer NOT NULL DEFAULT 0,
+                    ai_card integer NOT NULL DEFAULT 0,
+                    ai_dictionary integer NOT NULL DEFAULT 0,
+                    ai_correction integer NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, activity_date)
+                );
+
                 CREATE TABLE IF NOT EXISTS app_settings (
                     key text PRIMARY KEY,
                     value jsonb NOT NULL
@@ -564,6 +597,244 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         return summary;
     }
 
+    public async Task<BrowserLoginCode> CreateBrowserLoginCodeAsync(string userId, TimeSpan ttl)
+    {
+        await EnsureReadyAsync();
+        var code = new BrowserLoginCode
+        {
+            Code = GenerateNumericCode(),
+            UserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.Add(ttl)
+        };
+
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+
+        await using (var cleanup = connection.CreateCommand())
+        {
+            cleanup.Transaction = transaction;
+            cleanup.CommandText = """
+                DELETE FROM app_browser_login_codes
+                WHERE user_id = @user_id OR expires_at <= @now OR used_at IS NOT NULL;
+                """;
+            cleanup.Parameters.AddWithValue("user_id", userId);
+            cleanup.Parameters.AddWithValue("now", DateTimeOffset.UtcNow);
+            await cleanup.ExecuteNonQueryAsync();
+        }
+
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                INSERT INTO app_browser_login_codes (code, user_id, created_at, expires_at, used_at)
+                VALUES (@code, @user_id, @created_at, @expires_at, NULL);
+                """;
+            command.Parameters.AddWithValue("code", code.Code);
+            command.Parameters.AddWithValue("user_id", code.UserId);
+            command.Parameters.AddWithValue("created_at", code.CreatedAt);
+            command.Parameters.AddWithValue("expires_at", code.ExpiresAt);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await transaction.CommitAsync();
+        return code;
+    }
+
+    public async Task<BrowserLoginResult> RedeemBrowserLoginCodeAsync(string codeText)
+    {
+        await EnsureReadyAsync();
+        var normalized = NormalizeLoginCode(codeText);
+
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT code, user_id, created_at, expires_at, used_at
+            FROM app_browser_login_codes
+            WHERE code = @code
+            FOR UPDATE;
+            """;
+        command.Parameters.AddWithValue("code", normalized);
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync()) return BrowserLoginResult.Fail("کد ورود پیدا نشد.");
+
+        var loginCode = new BrowserLoginCode
+        {
+            Code = reader.GetString(0),
+            UserId = reader.GetString(1),
+            CreatedAt = reader.GetFieldValue<DateTimeOffset>(2),
+            ExpiresAt = reader.GetFieldValue<DateTimeOffset>(3),
+            UsedAt = reader.IsDBNull(4) ? null : reader.GetFieldValue<DateTimeOffset>(4)
+        };
+        await reader.DisposeAsync();
+
+        if (loginCode.UsedAt.HasValue) return BrowserLoginResult.Fail("این کد قبلا استفاده شده است.");
+        if (loginCode.ExpiresAt <= DateTimeOffset.UtcNow) return BrowserLoginResult.Fail("کد ورود منقضی شده است. از ربات یک کد جدید بگیر.");
+
+        var user = await FindUserAsync(connection, transaction, loginCode.UserId);
+        if (user is null) return BrowserLoginResult.Fail("اکانت تلگرام پیدا نشد.");
+
+        var token = GenerateSessionToken();
+        await using (var session = connection.CreateCommand())
+        {
+            session.Transaction = transaction;
+            session.CommandText = """
+                INSERT INTO app_browser_sessions (token_hash, user_id, created_at, last_seen_at)
+                VALUES (@token_hash, @user_id, @created_at, @last_seen_at);
+
+                UPDATE app_browser_login_codes SET used_at = @used_at WHERE code = @code;
+                """;
+            session.Parameters.AddWithValue("token_hash", HashToken(token));
+            session.Parameters.AddWithValue("user_id", user.Id);
+            session.Parameters.AddWithValue("created_at", DateTimeOffset.UtcNow);
+            session.Parameters.AddWithValue("last_seen_at", DateTimeOffset.UtcNow);
+            session.Parameters.AddWithValue("used_at", DateTimeOffset.UtcNow);
+            session.Parameters.AddWithValue("code", loginCode.Code);
+            await session.ExecuteNonQueryAsync();
+        }
+
+        await transaction.CommitAsync();
+        return BrowserLoginResult.Ok(token, user);
+    }
+
+    public async Task<UserProfile?> GetUserBySessionTokenAsync(string sessionToken)
+    {
+        await EnsureReadyAsync();
+        if (string.IsNullOrWhiteSpace(sessionToken)) return null;
+        var hash = HashToken(sessionToken);
+
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT user_id
+            FROM app_browser_sessions
+            WHERE token_hash = @token_hash
+            FOR UPDATE;
+            """;
+        command.Parameters.AddWithValue("token_hash", hash);
+        var userId = await command.ExecuteScalarAsync() as string;
+        if (string.IsNullOrWhiteSpace(userId)) return null;
+
+        var user = await FindUserAsync(connection, transaction, userId);
+        if (user is null) return null;
+
+        user.LastSeenAt = DateTimeOffset.UtcNow;
+        await UpsertUserAsync(connection, transaction, user);
+
+        await using var touch = connection.CreateCommand();
+        touch.Transaction = transaction;
+        touch.CommandText = "UPDATE app_browser_sessions SET last_seen_at = @last_seen_at WHERE token_hash = @token_hash;";
+        touch.Parameters.AddWithValue("last_seen_at", DateTimeOffset.UtcNow);
+        touch.Parameters.AddWithValue("token_hash", hash);
+        await touch.ExecuteNonQueryAsync();
+
+        await transaction.CommitAsync();
+        return user;
+    }
+
+    public async Task RecordActivityAsync(string userId, ActivityKind kind, int count = 1)
+    {
+        await EnsureReadyAsync();
+        var safeCount = Math.Max(1, count);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var now = DateTimeOffset.UtcNow;
+        var increments = ActivityIncrements(kind, safeCount);
+
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO app_user_daily_activity
+                (user_id, activity_date, first_seen_at, last_seen_at, request_count,
+                 cards_added, reviews, ai_card, ai_dictionary, ai_correction)
+            VALUES
+                (@user_id, @activity_date, @now, @now, @request_count,
+                 @cards_added, @reviews, @ai_card, @ai_dictionary, @ai_correction)
+            ON CONFLICT (user_id, activity_date) DO UPDATE SET
+                last_seen_at = EXCLUDED.last_seen_at,
+                request_count = app_user_daily_activity.request_count + EXCLUDED.request_count,
+                cards_added = app_user_daily_activity.cards_added + EXCLUDED.cards_added,
+                reviews = app_user_daily_activity.reviews + EXCLUDED.reviews,
+                ai_card = app_user_daily_activity.ai_card + EXCLUDED.ai_card,
+                ai_dictionary = app_user_daily_activity.ai_dictionary + EXCLUDED.ai_dictionary,
+                ai_correction = app_user_daily_activity.ai_correction + EXCLUDED.ai_correction;
+            """;
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("activity_date", today);
+        command.Parameters.AddWithValue("now", now);
+        command.Parameters.AddWithValue("request_count", increments.Requests);
+        command.Parameters.AddWithValue("cards_added", increments.CardsAdded);
+        command.Parameters.AddWithValue("reviews", increments.Reviews);
+        command.Parameters.AddWithValue("ai_card", increments.AiCard);
+        command.Parameters.AddWithValue("ai_dictionary", increments.AiDictionary);
+        command.Parameters.AddWithValue("ai_correction", increments.AiCorrection);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<List<AdminUserMetrics>> GetAdminUserMetricsAsync()
+    {
+        await EnsureReadyAsync();
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                u.id,
+                COALESCE(card_counts.total_cards, 0)::int,
+                COALESCE(card_counts.due_cards, 0)::int,
+                COALESCE(a.request_count, 0)::int,
+                CASE
+                    WHEN a.first_seen_at IS NULL THEN 0
+                    WHEN a.request_count > 0 THEN GREATEST(1, CEIL(EXTRACT(EPOCH FROM (a.last_seen_at - a.first_seen_at)) / 60.0))::int
+                    ELSE 0
+                END AS active_minutes,
+                COALESCE(a.cards_added, 0)::int,
+                COALESCE(a.reviews, 0)::int,
+                COALESCE(a.ai_card, 0)::int,
+                COALESCE(a.ai_dictionary, 0)::int,
+                COALESCE(a.ai_correction, 0)::int
+            FROM app_users u
+            LEFT JOIN LATERAL (
+                SELECT
+                    COUNT(*)::int AS total_cards,
+                    COUNT(*) FILTER (WHERE next_review_at <= now())::int AS due_cards
+                FROM app_cards c
+                WHERE c.user_id = u.id
+            ) card_counts ON true
+            LEFT JOIN app_user_daily_activity a
+                ON a.user_id = u.id AND a.activity_date = @today
+            ORDER BY u.last_seen_at DESC;
+            """;
+        command.Parameters.AddWithValue("today", today);
+
+        var result = new List<AdminUserMetrics>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            result.Add(new AdminUserMetrics
+            {
+                UserId = reader.GetString(0),
+                TotalCards = reader.GetInt32(1),
+                DueCards = reader.GetInt32(2),
+                RequestsToday = reader.GetInt32(3),
+                ActiveMinutesToday = reader.GetInt32(4),
+                CardsAddedToday = reader.GetInt32(5),
+                ReviewsToday = reader.GetInt32(6),
+                AiCardToday = reader.GetInt32(7),
+                AiDictionaryToday = reader.GetInt32(8),
+                AiCorrectionToday = reader.GetInt32(9)
+            });
+        }
+
+        return result;
+    }
+
     public async Task<AppSettingsState> GetSettingsAsync()
     {
         await EnsureReadyAsync();
@@ -948,6 +1219,45 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         AiToolKind.Correction => plan.CorrectionMonthlyLimit,
         _ => plan.AiMonthlyLimit
     };
+
+    private static (int Requests, int CardsAdded, int Reviews, int AiCard, int AiDictionary, int AiCorrection) ActivityIncrements(ActivityKind kind, int count)
+    {
+        return kind switch
+        {
+            ActivityKind.CardAdded => (0, count, 0, 0, 0, 0),
+            ActivityKind.Review => (0, 0, count, 0, 0, 0),
+            ActivityKind.AiCard => (0, 0, 0, count, 0, 0),
+            ActivityKind.AiDictionary => (0, 0, 0, 0, count, 0),
+            ActivityKind.AiCorrection => (0, 0, 0, 0, 0, count),
+            _ => (count, 0, 0, 0, 0, 0)
+        };
+    }
+
+    private static string GenerateNumericCode()
+    {
+        Span<byte> bytes = stackalloc byte[4];
+        RandomNumberGenerator.Fill(bytes);
+        var value = BitConverter.ToUInt32(bytes) % 1_000_000;
+        return value.ToString("D6");
+    }
+
+    private static string GenerateSessionToken()
+    {
+        Span<byte> bytes = stackalloc byte[32];
+        RandomNumberGenerator.Fill(bytes);
+        return Convert.ToBase64String(bytes).Replace("+", "-").Replace("/", "_").TrimEnd('=');
+    }
+
+    private static string HashToken(string token)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(token.Trim());
+        return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    }
+
+    private static string NormalizeLoginCode(string value)
+    {
+        return new string((value ?? string.Empty).Where(char.IsDigit).ToArray());
+    }
 
     private static string GenerateCode()
     {

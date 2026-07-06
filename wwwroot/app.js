@@ -4,7 +4,8 @@ tg?.expand();
 
 const storage = {
   apiKey: "lingualite.openrouterApiKey",
-  devUserId: "lingualite.devUserId"
+  devUserId: "lingualite.devUserId",
+  sessionToken: "lingualite.sessionToken"
 };
 
 const devUserId = getOrCreateDevUserId();
@@ -43,6 +44,12 @@ const elements = {
   rememberedButton: $("#rememberedButton"),
   forgotButton: $("#forgotButton"),
   refreshButton: $("#refreshButton"),
+  authGate: $("#authGate"),
+  openBotButton: $("#openBotButton"),
+  browserLoginForm: $("#browserLoginForm"),
+  browserLoginCodeInput: $("#browserLoginCodeInput"),
+  browserLoginButton: $("#browserLoginButton"),
+  authHelpText: $("#authHelpText"),
   form: $("#cardForm"),
   formTitle: $("#formTitle"),
   saveCardButton: $("#saveCardButton"),
@@ -155,6 +162,7 @@ const typeCopy = {
 applyTelegramTheme();
 bindEvents();
 loadSettings();
+registerPwa();
 updateCardMode();
 loadAll();
 
@@ -171,6 +179,7 @@ function bindEvents() {
   elements.rememberedButton.addEventListener("click", () => reviewCurrent(true));
   elements.forgotButton.addEventListener("click", () => reviewCurrent(false));
   elements.refreshButton.addEventListener("click", loadAll);
+  elements.browserLoginForm.addEventListener("submit", browserLogin);
   elements.form.addEventListener("submit", saveCard);
   elements.cancelEditButton.addEventListener("click", resetCardForm);
   elements.completeAiButton.addEventListener("click", completeWithAi);
@@ -203,6 +212,8 @@ async function loadAll() {
     ]);
 
     state.config = config;
+    document.body.classList.remove("auth-required");
+    elements.authGate.hidden = true;
     state.due = due;
     state.cards = cards;
     renderProfile(config);
@@ -213,8 +224,54 @@ async function loadAll() {
     renderDeck(cards);
     pickNextCard();
   } catch (error) {
+    if (error.status === 401) {
+      await showAuthGate();
+      return;
+    }
     showLoadError(error);
     showToast(error.message || "دریافت اطلاعات انجام نشد.");
+  }
+}
+
+async function showAuthGate() {
+  document.body.classList.add("auth-required");
+  elements.authGate.hidden = false;
+  elements.accountStatusText.textContent = "نیاز به ورود";
+  try {
+    const publicSettings = await fetchJson("/api/public-settings", { skipAuth: true });
+    const username = publicSettings.telegramBotUsername;
+    if (username) {
+      elements.openBotButton.href = `https://t.me/${encodeURIComponent(username)}?start=login`;
+      elements.authHelpText.textContent = "بعد از start کردن ربات، /login را بزن و کد ۶ رقمی را اینجا وارد کن.";
+    } else {
+      elements.openBotButton.href = "https://t.me/";
+      elements.authHelpText.textContent = "Bot Username هنوز در پنل ادمین تنظیم نشده است. ربات را دستی باز کن و /login را بزن.";
+    }
+  } catch {
+    elements.authHelpText.textContent = "اتصال به سرور برقرار نشد. تنظیمات دامنه، ربات و دیتابیس را بررسی کن.";
+  }
+}
+
+async function browserLogin(event) {
+  event.preventDefault();
+  const code = elements.browserLoginCodeInput.value.trim();
+  if (!code) return showToast("کد ورود را وارد کن.");
+
+  setButtonLoading(elements.browserLoginButton, true, "در حال اتصال...");
+  try {
+    const result = await fetchJson("/api/auth/browser-login", {
+      method: "POST",
+      skipAuth: true,
+      body: JSON.stringify({ code })
+    });
+    localStorage.setItem(storage.sessionToken, result.sessionToken);
+    elements.browserLoginCodeInput.value = "";
+    showToast("اکانت تلگرام وصل شد.");
+    await loadAll();
+  } catch (error) {
+    showToast(error.message || "اتصال اکانت انجام نشد.");
+  } finally {
+    setButtonLoading(elements.browserLoginButton, false, "اتصال اکانت");
   }
 }
 
@@ -695,15 +752,28 @@ async function deleteCard(id) {
 async function fetchJson(url, options = {}) {
   const headers = new Headers(options.headers || {});
   headers.set("Content-Type", "application/json");
-  headers.set("X-Dev-User-Id", devUserId);
+  if (!options.skipAuth) {
+    headers.set("X-Dev-User-Id", devUserId);
+    const sessionToken = localStorage.getItem(storage.sessionToken) || "";
+    if (sessionToken) headers.set("X-Session-Token", sessionToken);
+  }
   if (tg?.initData) headers.set("X-Telegram-Init-Data", tg.initData);
 
   const response = await fetch(url, { ...options, headers });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    throw new Error(error.message || "درخواست ناموفق بود.");
+    const failure = new Error(error.message || "درخواست ناموفق بود.");
+    failure.status = response.status;
+    throw failure;
   }
   return response.status === 204 ? null : response.json();
+}
+
+function registerPwa() {
+  if (!("serviceWorker" in navigator)) return;
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/service-worker.js").catch(() => {});
+  });
 }
 
 function showLoadError(error) {

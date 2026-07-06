@@ -40,6 +40,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -264,7 +268,8 @@ select:focus {
   position: sticky;
   top: max(8px, env(safe-area-inset-top));
   z-index: 10;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 5px;
   padding: 5px;
   border: 1px solid var(--line);
@@ -272,17 +277,10 @@ select:focus {
   background: color-mix(in srgb, var(--surface), transparent 6%);
   backdrop-filter: blur(12px);
   margin-bottom: 14px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.tabs::-webkit-scrollbar {
-  display: none;
 }
 
 .tab {
-  flex: 0 0 auto;
-  min-width: 74px;
+  min-width: 0;
   min-height: 40px;
   border: 0;
   border-radius: 10px;
@@ -290,6 +288,7 @@ select:focus {
   color: var(--muted);
   font-weight: 900;
   font-size: 0.84rem;
+  white-space: nowrap;
 }
 
 .tab.active {
@@ -463,6 +462,53 @@ select:focus {
   gap: 13px;
   padding: 14px;
   margin-bottom: 12px;
+}
+
+.auth-gate {
+  margin-top: 14px;
+}
+
+.auth-card {
+  display: grid;
+  gap: 13px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.auth-bot-link {
+  display: grid;
+  place-items: center;
+  text-decoration: none;
+}
+
+.browser-login-form {
+  display: grid;
+  gap: 10px;
+}
+
+.browser-login-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 900;
+}
+
+.auth-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.8;
+}
+
+body.auth-required .account-strip,
+body.auth-required .stats-grid,
+body.auth-required .tabs,
+body.auth-required .view {
+  display: none !important;
 }
 
 .ai-panel {
@@ -944,13 +990,22 @@ select:focus {
     gap: 6px;
   }
 
+  .tabs {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
   .stat {
     padding-inline: 7px;
   }
 
-  .stat small,
-  .tab {
+  .stat small {
     font-size: 0.7rem;
+  }
+
+  .tab {
+    min-height: 38px;
+    font-size: 0.76rem;
   }
 
   .segmented {

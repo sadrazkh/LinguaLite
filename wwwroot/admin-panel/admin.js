@@ -31,7 +31,7 @@ const elements = {
   toast: $("#toast")
 };
 
-let state = { users: [], plans: [], codes: [], settings: null, draggingPlanId: null };
+let state = { users: [], metrics: [], plans: [], codes: [], settings: null, draggingPlanId: null };
 
 elements.loginForm.addEventListener("submit", adminLogin);
 elements.logoutButton.addEventListener("click", logout);
@@ -56,13 +56,14 @@ async function adminLogin(event) {
 
 async function loadAll() {
   setStatus("در حال بارگذاری...", "");
-  const [users, codes, plans, settingsPayload] = await Promise.all([
+  const [users, metrics, codes, plans, settingsPayload] = await Promise.all([
     adminFetch("/api/admin/users"),
+    adminFetch("/api/admin/user-metrics"),
     adminFetch("/api/admin/codes"),
     adminFetch("/api/admin/plans"),
     adminFetch("/api/admin/settings")
   ]);
-  state = { ...state, users, codes, plans, settings: settingsPayload.settings };
+  state = { ...state, users, metrics, codes, plans, settings: settingsPayload.settings };
   elements.dashboard.hidden = false;
   elements.logoutButton.hidden = false;
   setStatus("ادمین تایید شد.", "ok");
@@ -149,12 +150,24 @@ function renderPlans() {
 function renderUsers() {
   elements.usersList.innerHTML = state.users.map(user => {
     const plan = findPlan(user.plan);
+    const metrics = findMetrics(user.id);
     return `
       <article class="admin-item">
         <div>
           <strong>${escapeHtml(user.displayName || user.id)}</strong>
           <small>${escapeHtml(user.id)} · tg:${escapeHtml(user.telegramId || "-")} · @${escapeHtml(user.telegramUsername || "-")}</small>
           <small>${escapeHtml(user.source)} · <b class="inline-badge" style="background:${safeColor(plan?.badgeColor, "#16a34a")};color:${safeColor(plan?.badgeTextColor, "#ffffff")}">${escapeHtml(user.plan)}</b> · ${user.isActive ? "فعال" : "غیرفعال"} · ${escapeHtml(featureSummary(user.features))}</small>
+          <div class="user-metrics">
+            <span>کارت: ${toPersianNumber(metrics.totalCards)}</span>
+            <span>مرور آماده: ${toPersianNumber(metrics.dueCards)}</span>
+            <span>فعالیت امروز: ${toPersianNumber(metrics.activeMinutesToday)} دقیقه</span>
+            <span>درخواست امروز: ${toPersianNumber(metrics.requestsToday)}</span>
+            <span>افزوده امروز: ${toPersianNumber(metrics.cardsAddedToday)}</span>
+            <span>مرور امروز: ${toPersianNumber(metrics.reviewsToday)}</span>
+            <span>AI کارت: ${toPersianNumber(metrics.aiCardToday)}</span>
+            <span>دیکشنری: ${toPersianNumber(metrics.aiDictionaryToday)}</span>
+            <span>اصلاح: ${toPersianNumber(metrics.aiCorrectionToday)}</span>
+          </div>
         </div>
         <div class="user-controls">
           <select data-user-field="plan">${state.plans.map(planItem => `<option value="${escapeHtml(planItem.name)}" ${planItem.name === user.plan ? "selected" : ""}>${escapeHtml(planItem.name)}</option>`).join("")}</select>
@@ -373,6 +386,20 @@ function defaultFeatures() {
 
 function findPlan(nameOrId) {
   return state.plans.find(plan => plan.name === nameOrId || plan.id === nameOrId);
+}
+
+function findMetrics(userId) {
+  return state.metrics.find(item => item.userId === userId) || {
+    totalCards: 0,
+    dueCards: 0,
+    requestsToday: 0,
+    activeMinutesToday: 0,
+    cardsAddedToday: 0,
+    reviewsToday: 0,
+    aiCardToday: 0,
+    aiDictionaryToday: 0,
+    aiCorrectionToday: 0
+  };
 }
 
 function safeColor(value, fallback) {
