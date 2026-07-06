@@ -4,7 +4,6 @@ tg?.expand();
 
 const storage = {
   apiKey: "lingualite.openrouterApiKey",
-  adminToken: "lingualite.adminToken",
   devUserId: "lingualite.devUserId"
 };
 
@@ -63,14 +62,10 @@ const elements = {
   promptInput: $("#promptInput"),
   answerInput: $("#answerInput"),
   notesInput: $("#notesInput"),
-  adminLoginForm: $("#adminLoginForm"),
-  adminTokenInput: $("#adminTokenInput"),
-  adminPanel: $("#adminPanel"),
-  createCodeButton: $("#createCodeButton"),
-  codePlanInput: $("#codePlanInput"),
-  codeMaxUsesInput: $("#codeMaxUsesInput"),
-  usersList: $("#usersList"),
-  codesList: $("#codesList")
+  userIdText: $("#userIdText"),
+  userPlanText: $("#userPlanText"),
+  storageProviderText: $("#storageProviderText"),
+  userFeaturesText: $("#userFeaturesText")
 };
 
 const typeLabels = {
@@ -125,13 +120,13 @@ const typeCopy = {
     helper: "فیدبک یعنی اشتباه واقعی خودت را تبدیل به کارت مرور کنی؛ دستور AI اینجا مخصوص اصلاح اشتباه است.",
     aiHint: "اشتباه، اصلاح استاد یا جمله غلط را بنویس؛ AI دلیل، الگو و تمرین اصلاح می‌سازد.",
     aiPlaceholder: "مثلا: I programmer / استاد گفت: I am a programmer",
-    front: "اشتباه → اصلاح درست",
-    back: "دلیل اصلاح به فارسی",
+    front: "متن فیدبک یا اشتباه",
+    back: "توضیح تکمیلی",
     example: "مثال درست",
     prompt: "تمرین اصلاح",
     answer: "جواب صحیح",
     notes: "الگو و هشدار",
-    placeholders: ["wrong: I programmer → correct: I am a programmer", "در جمله انگلیسی برای معرفی شغل باید فعل be و حرف تعریف a بیاید.", "I am a programmer.", "Correct this sentence: I programmer.", "I am a programmer.", "الگو: I am a/an + job. نگوییم I programmer."]
+    placeholders: ["I programmer / استاد گفت: I am a programmer", "اگر توضیحی از استاد داری اینجا بنویس؛ AI یا سرور کارت را درست می‌چیند.", "I am a programmer.", "Correct this sentence: I programmer.", "I am a programmer.", "الگو: I am a/an + job. نگوییم I programmer."]
   }
 };
 
@@ -165,8 +160,6 @@ function bindEvents() {
   elements.redeemCodeButton.addEventListener("click", redeemCode);
   elements.exportButton.addEventListener("click", exportDeck);
   elements.importFileInput.addEventListener("change", importDeck);
-  elements.adminLoginForm.addEventListener("submit", adminLogin);
-  elements.createCodeButton.addEventListener("click", createAccessCode);
 }
 
 function applyTelegramTheme() {
@@ -192,18 +185,28 @@ async function loadAll() {
     state.config = config;
     state.due = due;
     renderProfile(config);
+    renderUserInfo(config);
     updateSummary(summary);
     renderBoxes(summary.boxes);
     renderDeck(cards);
     pickNextCard();
   } catch (error) {
+    showLoadError(error);
     showToast(error.message || "دریافت اطلاعات انجام نشد.");
   }
 }
 
 function renderProfile(config) {
   elements.profileText.textContent = `${config.displayName || config.userId} · ${config.plan}`;
-  elements.modelText.textContent = `مدل سرور: ${config.openRouterModel}`;
+  const keyStatus = config.aiServerKeyConfigured ? "کلید سرور فعال است" : "کلید را در ابزار وارد کن";
+  elements.modelText.textContent = `مدل: ${config.openRouterModel} · ${keyStatus}`;
+}
+
+function renderUserInfo(config) {
+  elements.userIdText.textContent = config.userId;
+  elements.userPlanText.textContent = config.isActive ? config.plan : `${config.plan} · غیرفعال`;
+  elements.storageProviderText.textContent = config.storageProvider === "postgres" ? "PostgreSQL" : "Local file";
+  elements.userFeaturesText.textContent = featureSummary(config.features);
 }
 
 function switchView(viewName) {
@@ -241,7 +244,7 @@ function pickNextCard() {
   elements.reviewCard.classList.toggle("feedback-review", isFeedback);
   elements.cardType.textContent = typeLabels[card.type] ?? "کارت";
   elements.boxLabel.textContent = `جعبه ${toPersianNumber(card.box)}`;
-  elements.frontCaption.textContent = isFeedback ? "اشتباه و اصلاح" : "روی کارت";
+  elements.frontCaption.textContent = isFeedback ? "تمرین اصلاح" : "روی کارت";
   elements.backCaption.textContent = isFeedback ? "دلیل و الگو" : "پشت کارت";
   elements.frontText.textContent = card.front;
   elements.exampleText.textContent = card.example || card.prompt || "";
@@ -339,6 +342,7 @@ function updateCardMode() {
   elements.notesLabel.textContent = copy.notes;
   elements.frontInput.placeholder = placeholders[0];
   elements.backInput.placeholder = placeholders[1];
+  elements.backInput.required = !isFeedback;
   elements.exampleInput.placeholder = placeholders[2];
   elements.promptInput.placeholder = placeholders[3];
   elements.answerInput.placeholder = placeholders[4];
@@ -351,7 +355,6 @@ function getSelectedType() {
 
 function loadSettings() {
   elements.apiKeyInput.value = localStorage.getItem(storage.apiKey) || "";
-  elements.adminTokenInput.value = localStorage.getItem(storage.adminToken) || "";
 }
 
 function saveSettings(event) {
@@ -406,93 +409,6 @@ async function importDeck(event) {
   }
 }
 
-async function adminLogin(event) {
-  event.preventDefault();
-  localStorage.setItem(storage.adminToken, elements.adminTokenInput.value.trim());
-  elements.adminPanel.hidden = false;
-  await loadAdmin();
-}
-
-async function loadAdmin() {
-  try {
-    const [users, codes] = await Promise.all([
-      adminFetch("/api/admin/users"),
-      adminFetch("/api/admin/codes")
-    ]);
-    renderUsers(users);
-    renderCodes(codes);
-  } catch (error) {
-    showToast(error.message || "ورود ادمین ناموفق بود.");
-  }
-}
-
-async function createAccessCode() {
-  try {
-    const code = await adminFetch("/api/admin/codes", {
-      method: "POST",
-      body: JSON.stringify({
-        plan: elements.codePlanInput.value.trim() || "Free",
-        maxUses: Number(elements.codeMaxUsesInput.value || 1),
-        features: { ai: true, exportImport: true, feedbackCards: true, unlimitedCards: true }
-      })
-    });
-    showToast(`کد ساخته شد: ${code.code}`);
-    await loadAdmin();
-  } catch (error) {
-    showToast(error.message || "کد ساخته نشد.");
-  }
-}
-
-function renderUsers(users) {
-  elements.usersList.innerHTML = users.map((user) => `
-    <article class="admin-item">
-      <div>
-        <strong>${escapeHtml(user.displayName || user.id)}</strong>
-        <small>${escapeHtml(user.id)} · ${escapeHtml(user.plan)} · ${user.isActive ? "فعال" : "غیرفعال"}</small>
-      </div>
-      <button class="mini-button" type="button" data-user-id="${escapeHtml(user.id)}" data-active="${user.isActive}">
-        ${user.isActive ? "غیرفعال کن" : "فعال کن"}
-      </button>
-    </article>
-  `).join("");
-
-  elements.usersList.querySelectorAll(".mini-button").forEach((button) => {
-    button.addEventListener("click", () => toggleUserActive(button.dataset.userId, button.dataset.active !== "true"));
-  });
-}
-
-async function toggleUserActive(id, isActive) {
-  try {
-    await adminFetch(`/api/admin/users/${encodeURIComponent(id)}`, {
-      method: "PUT",
-      body: JSON.stringify({ isActive })
-    });
-    await loadAdmin();
-  } catch (error) {
-    showToast(error.message || "وضعیت کاربر تغییر نکرد.");
-  }
-}
-
-function renderCodes(codes) {
-  elements.codesList.innerHTML = codes.map((code) => `
-    <article class="admin-item">
-      <div>
-        <strong>${escapeHtml(code.code)}</strong>
-        <small>${escapeHtml(code.plan)} · ${toPersianNumber(code.uses)}/${toPersianNumber(code.maxUses)}</small>
-      </div>
-    </article>
-  `).join("");
-}
-
-async function adminFetch(url, options = {}) {
-  const headers = new Headers(options.headers || {});
-  headers.set("Content-Type", "application/json");
-  headers.set("X-Admin-Token", localStorage.getItem(storage.adminToken) || "");
-  const response = await fetch(url, { ...options, headers });
-  if (!response.ok) throw new Error("دسترسی ادمین تایید نشد.");
-  return response.status === 204 ? null : response.json();
-}
-
 function setBoxProgress(box) {
   elements.boxProgress.querySelectorAll("i").forEach((item, index) => item.classList.toggle("active", index < box));
 }
@@ -530,6 +446,34 @@ async function fetchJson(url, options = {}) {
     throw new Error(error.message || "درخواست ناموفق بود.");
   }
   return response.status === 204 ? null : response.json();
+}
+
+function showLoadError(error) {
+  elements.reviewCard.hidden = true;
+  elements.emptyState.hidden = false;
+  const title = elements.emptyState.querySelector("strong");
+  const text = elements.emptyState.querySelector("span");
+  if (title) title.textContent = "دیتا لود نشد.";
+  if (text) text.textContent = error.message || "اتصال سرور یا دیتابیس را بررسی کن.";
+  elements.dueCards.textContent = "۰";
+  elements.totalCards.textContent = "۰";
+  elements.accuracy.textContent = "۰%";
+}
+
+function featureSummary(features = {}) {
+  const enabled = [];
+  if (features.ai) enabled.push("AI");
+  if (features.feedbackCards) enabled.push("Feedback");
+  if (features.exportImport) enabled.push("Import/Export");
+  if (features.unlimitedCards) enabled.push("Unlimited");
+  return enabled.length ? enabled.join(" · ") : "محدود";
+}
+
+function formatDate(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleDateString("fa-IR", { month: "short", day: "numeric" });
 }
 
 function getOrCreateDevUserId() {

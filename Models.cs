@@ -1,12 +1,20 @@
+using System.Text.Json;
+
 public sealed class UserProfile
 {
     public string Id { get; set; } = string.Empty;
     public string Source { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
+    public string TelegramId { get; set; } = string.Empty;
+    public string TelegramUsername { get; set; } = string.Empty;
+    public long? TelegramChatId { get; set; }
     public bool IsActive { get; set; } = true;
     public string Plan { get; set; } = "Free";
     public FeatureSet Features { get; set; } = FeatureSet.AllEnabled();
     public string AccessCode { get; set; } = string.Empty;
+    public bool RemindersEnabled { get; set; } = true;
+    public int? ReminderHour { get; set; }
+    public DateTimeOffset? LastReminderAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset LastSeenAt { get; set; }
 }
@@ -19,6 +27,69 @@ public sealed class FeatureSet
     public bool UnlimitedCards { get; set; } = true;
 
     public static FeatureSet AllEnabled() => new();
+}
+
+public sealed class PlanDefinition
+{
+    public string Id { get; set; } = "free";
+    public string Name { get; set; } = "Free";
+    public FeatureSet Features { get; set; } = FeatureSet.AllEnabled();
+    public int AiDailyLimit { get; set; } = 20;
+    public int AiMonthlyLimit { get; set; } = 300;
+    public int CardLimit { get; set; } = 200;
+    public int SortOrder { get; set; }
+    public bool IsDefault { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+
+    public static List<PlanDefinition> Defaults() =>
+    [
+        new()
+        {
+            Id = "free",
+            Name = "Free",
+            Features = FeatureSet.AllEnabled(),
+            AiDailyLimit = 20,
+            AiMonthlyLimit = 300,
+            CardLimit = 200,
+            SortOrder = 0,
+            IsDefault = true,
+            CreatedAt = DateTimeOffset.UtcNow
+        },
+        new()
+        {
+            Id = "pro",
+            Name = "Pro",
+            Features = FeatureSet.AllEnabled(),
+            AiDailyLimit = -1,
+            AiMonthlyLimit = -1,
+            CardLimit = -1,
+            SortOrder = 1,
+            IsDefault = false,
+            CreatedAt = DateTimeOffset.UtcNow
+        }
+    ];
+}
+
+public sealed class AiUsageSummary
+{
+    public int Today { get; set; }
+    public int ThisMonth { get; set; }
+    public int DailyLimit { get; set; }
+    public int MonthlyLimit { get; set; }
+    public bool Allowed { get; set; } = true;
+    public string Message { get; set; } = string.Empty;
+}
+
+public sealed class AppSettingsState
+{
+    public string OpenRouterModel { get; set; } = string.Empty;
+    public string OpenRouterReferer { get; set; } = string.Empty;
+    public string PublicBaseUrl { get; set; } = string.Empty;
+    public string TelegramBotUsername { get; set; } = string.Empty;
+    public string TelegramMiniAppUrl { get; set; } = string.Empty;
+    public bool BotEnabled { get; set; } = true;
+    public bool RemindersEnabled { get; set; } = true;
+    public int ReminderHour { get; set; } = 9;
 }
 
 public sealed class AccessCode
@@ -93,20 +164,30 @@ public enum ImportMode
     Replace
 }
 
-public sealed record UserIdentity(string StorageKey, string Source, string DisplayName, bool IsAuthorized)
+public sealed record UserIdentity(
+    string StorageKey,
+    string Source,
+    string DisplayName,
+    bool IsAuthorized,
+    string TelegramId = "",
+    string TelegramUsername = "",
+    long? TelegramChatId = null)
 {
     public static UserIdentity Unauthorized() => new("unauthorized", "telegram", string.Empty, false);
 }
 
-public sealed record TelegramUser(string Id, string Name);
+public sealed record TelegramUser(string Id, string Name, string Username);
 public sealed record CreateCardRequest(string Front, string Back, string? Example, string? Prompt, string? Answer, string? Notes, CardType Type = CardType.Word);
 public sealed record AiCompleteRequest(string Text, CardType? Type);
 public sealed record ReviewRequest(bool Remembered);
 public sealed record ImportRequest(List<FlashCard> Cards, ImportMode Mode = ImportMode.Merge);
 public sealed record ExportPayload(string UserId, DateTimeOffset ExportedAt, List<FlashCard> Cards);
 public sealed record RedeemCodeRequest(string Code);
-public sealed record AdminUpdateUserRequest(bool? IsActive, string? Plan, FeatureSet? Features);
+public sealed record AdminUpdateUserRequest(bool? IsActive, string? Plan, FeatureSet? Features, bool? RemindersEnabled, int? ReminderHour);
 public sealed record CreateAccessCodeRequest(string? Code, string? Plan, FeatureSet? Features, int? MaxUses);
+public sealed record UpsertPlanRequest(string Id, string Name, FeatureSet Features, int AiDailyLimit, int AiMonthlyLimit, int CardLimit, int SortOrder, bool IsDefault);
+public sealed record UpdateSettingsRequest(string? OpenRouterModel, string? OpenRouterReferer, string? PublicBaseUrl, string? TelegramBotUsername, string? TelegramMiniAppUrl, bool? BotEnabled, bool? RemindersEnabled, int? ReminderHour);
+public sealed record TelegramWebhookRequest(JsonElement Update);
 public sealed record RedeemResult(bool Success, string Message, UserProfile? Profile)
 {
     public static RedeemResult Ok(UserProfile profile) => new(true, string.Empty, profile);

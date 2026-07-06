@@ -193,7 +193,7 @@ textarea:focus {
   top: max(8px, env(safe-area-inset-top));
   z-index: 10;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 5px;
   padding: 5px;
   border: 1px solid var(--line);
@@ -426,6 +426,55 @@ textarea:focus {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px;
+}
+
+.profile-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.profile-grid div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.profile-grid small {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.profile-grid strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+}
+
+.admin-status {
+  margin: 0;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.admin-status.ok {
+  border-color: color-mix(in srgb, var(--success), var(--line) 45%);
+  color: var(--success);
+}
+
+.admin-status.error {
+  border-color: color-mix(in srgb, var(--danger), var(--line) 45%);
+  color: var(--danger);
 }
 
 .file-button {
@@ -688,7 +737,8 @@ textarea:focus {
 
   .ai-row,
   .tool-row,
-  .admin-grid {
+  .admin-grid,
+  .profile-grid {
     grid-template-columns: 1fr;
   }
 

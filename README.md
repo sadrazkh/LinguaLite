@@ -10,6 +10,28 @@ dotnet run
 
 پروژه با `LinguaLite.sln` باز می‌شود.
 
+در حالت Development اگر `DATABASE_URL` یا `POSTGRES_CONNECTION_STRING` تنظیم نشده باشد، برنامه برای تست لوکال از فایل `App_Data/local-database.json` استفاده می‌کند. این فقط برای لوکال است؛ روی سرور باید Postgres تنظیم شود.
+
+توکن ادمین لوکال داخل `Properties/launchSettings.json` تنظیم شده:
+
+```text
+ADMIN_TOKEN=local-admin
+```
+
+اگر خواستی لوکال را هم با Postgres تست کنی:
+
+```powershell
+docker compose -f docker-compose.local.yml up -d
+```
+
+بعد این env را برای اجرای اپ بگذار:
+
+```text
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/lingualite
+ADMIN_TOKEN=local-admin
+OPENROUTER_MODEL=google/gemma-4-31b-it:free
+```
+
 ## دیتابیس
 
 ذخیره‌سازی روی PostgreSQL است. دیگر دیتای اصلی داخل کانتینر یا فایل `/data/database.json` ذخیره نمی‌شود.
@@ -46,6 +68,43 @@ OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
 اگر نگذاری، کاربر می‌تواند کلید خودش را در بخش ابزار وارد کند.
+
+## پنل ادمین
+
+پنل ادمین داخل Mini App نمایش داده نمی‌شود و جداست:
+
+```text
+https://YOUR_DOMAIN/admin
+```
+
+با مقدار `ADMIN_TOKEN` وارد شو. از این پنل می‌توانی این‌ها را مدیریت کنی:
+
+- کاربران، شناسه تلگرام، username، chat id، فعال/غیرفعال بودن و یادآوری
+- پلن‌ها، سقف روزانه/ماهانه AI و سقف کارت‌ها
+- کدهای دسترسی
+- مدل OpenRouter
+- تنظیمات ربات، لینک Mini App و Webhook
+
+برای محدودیت‌ها، مقدار `-1` یعنی نامحدود.
+
+## ربات تلگرام
+
+ربات از همین اپ webhook می‌گیرد:
+
+```text
+https://YOUR_DOMAIN/api/bot/webhook
+```
+
+در پنل ادمین مقدار `Public Base URL` و `Telegram Mini App URL` را تنظیم کن و بعد دکمه تنظیم Webhook را بزن.
+
+دستورهای پایه ربات:
+
+```text
+/start
+/due
+/add word | معنی
+/feedback wrong -> correct
+```
 
 ## شناسه کاربر و سشن
 

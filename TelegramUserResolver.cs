@@ -16,7 +16,7 @@ public static class TelegramUserResolver
                 var tgUser = ExtractTelegramUser(initData);
                 if (tgUser is not null)
                 {
-                    return new UserIdentity($"tg_{tgUser.Id}", "telegram", tgUser.Name, true);
+                    return new UserIdentity($"tg_{tgUser.Id}", "telegram-miniapp", tgUser.Name, true, tgUser.Id, tgUser.Username, long.TryParse(tgUser.Id, out var chatId) ? chatId : null);
                 }
             }
 
@@ -72,7 +72,8 @@ public static class TelegramUserResolver
             name = $"{name} {lastName.GetString()}".Trim();
         }
 
-        return new TelegramUser(id, name);
+        var username = root.TryGetProperty("username", out var usernameElement) ? usernameElement.GetString() ?? string.Empty : string.Empty;
+        return new TelegramUser(id, name, username);
     }
 
     private static Dictionary<string, string> ParseQuery(string query)

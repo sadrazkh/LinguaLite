@@ -10,6 +10,8 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
     private NpgsqlDataSource? _dataSource;
     private bool _schemaReady;
 
+    public string ProviderName => "postgres";
+
     private NpgsqlDataSource DataSource => _dataSource ??= NpgsqlDataSource.Create(GetConnectionString(configuration));
 
     public async Task EnsureReadyAsync()
@@ -28,13 +30,26 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                     id text PRIMARY KEY,
                     source text NOT NULL,
                     display_name text NOT NULL,
+                    telegram_id text NOT NULL DEFAULT '',
+                    telegram_username text NOT NULL DEFAULT '',
+                    telegram_chat_id bigint NULL,
                     is_active boolean NOT NULL DEFAULT true,
                     plan text NOT NULL DEFAULT 'Free',
                     features jsonb NOT NULL DEFAULT '{}'::jsonb,
                     access_code text NOT NULL DEFAULT '',
+                    reminders_enabled boolean NOT NULL DEFAULT true,
+                    reminder_hour integer NULL,
+                    last_reminder_at timestamptz NULL,
                     created_at timestamptz NOT NULL,
                     last_seen_at timestamptz NOT NULL
                 );
+
+                ALTER TABLE app_users ADD COLUMN IF NOT EXISTS telegram_id text NOT NULL DEFAULT '';
+                ALTER TABLE app_users ADD COLUMN IF NOT EXISTS telegram_username text NOT NULL DEFAULT '';
+                ALTER TABLE app_users ADD COLUMN IF NOT EXISTS telegram_chat_id bigint NULL;
+                ALTER TABLE app_users ADD COLUMN IF NOT EXISTS reminders_enabled boolean NOT NULL DEFAULT true;
+                ALTER TABLE app_users ADD COLUMN IF NOT EXISTS reminder_hour integer NULL;
+                ALTER TABLE app_users ADD COLUMN IF NOT EXISTS last_reminder_at timestamptz NULL;
 
                 CREATE TABLE IF NOT EXISTS app_cards (
                     id uuid PRIMARY KEY,
@@ -64,8 +79,33 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                     uses integer NOT NULL DEFAULT 0,
                     created_at timestamptz NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS app_plans (
+                    id text PRIMARY KEY,
+                    name text NOT NULL,
+                    features jsonb NOT NULL DEFAULT '{}'::jsonb,
+                    ai_daily_limit integer NOT NULL DEFAULT 20,
+                    ai_monthly_limit integer NOT NULL DEFAULT 300,
+                    card_limit integer NOT NULL DEFAULT 200,
+                    sort_order integer NOT NULL DEFAULT 0,
+                    is_default boolean NOT NULL DEFAULT false,
+                    created_at timestamptz NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS app_ai_usage (
+                    user_id text NOT NULL,
+                    usage_date date NOT NULL,
+                    count integer NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, usage_date)
+                );
+
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key text PRIMARY KEY,
+                    value jsonb NOT NULL
+                );
                 """;
             await command.ExecuteNonQueryAsync();
+            await SeedPlansAsync(connection);
             _schemaReady = true;
         }
         finally
@@ -88,6 +128,18 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
             {
                 existing.DisplayName = identity.DisplayName;
             }
+            if (!string.IsNullOrWhiteSpace(identity.TelegramId))
+            {
+                existing.TelegramId = identity.TelegramId;
+            }
+            if (!string.IsNullOrWhiteSpace(identity.TelegramUsername))
+            {
+                existing.TelegramUsername = identity.TelegramUsername;
+            }
+            if (identity.TelegramChatId.HasValue)
+            {
+                existing.TelegramChatId = identity.TelegramChatId;
+            }
             existing.LastSeenAt = DateTimeOffset.UtcNow;
 
             await UpsertUserAsync(connection, transaction, existing);
@@ -100,6 +152,9 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
             Id = identity.StorageKey,
             Source = identity.Source,
             DisplayName = identity.DisplayName,
+            TelegramId = identity.TelegramId,
+            TelegramUsername = identity.TelegramUsername,
+            TelegramChatId = identity.TelegramChatId,
             CreatedAt = DateTimeOffset.UtcNow,
             LastSeenAt = DateTimeOffset.UtcNow
         };
@@ -212,7 +267,9 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         await using var connection = await DataSource.OpenConnectionAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, source, display_name, is_active, plan, features::text, access_code, created_at, last_seen_at
+            SELECT id, source, display_name, telegram_id, telegram_username, telegram_chat_id,
+                   is_active, plan, features::text, access_code, reminders_enabled, reminder_hour,
+                   last_reminder_at, created_at, last_seen_at
             FROM app_users
             ORDER BY last_seen_at DESC;
             """;
@@ -323,6 +380,185 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         return RedeemResult.Ok(user);
     }
 
+    public async Task<List<PlanDefinition>> GetPlansAsync()
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, name, features::text, ai_daily_limit, ai_monthly_limit, card_limit, sort_order, is_default, created_at
+            FROM app_plans
+            ORDER BY sort_order, name;
+            """;
+
+        var plans = new List<PlanDefinition>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            plans.Add(ReadPlan(reader));
+        }
+
+        return plans;
+    }
+
+    public async Task<PlanDefinition> UpsertPlanAsync(PlanDefinition plan)
+    {
+        await EnsureReadyAsync();
+        plan.Id = NormalizePlanId(plan.Id);
+        plan.Name = string.IsNullOrWhiteSpace(plan.Name) ? plan.Id : plan.Name.Trim();
+        plan.CreatedAt = plan.CreatedAt == default ? DateTimeOffset.UtcNow : plan.CreatedAt;
+
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+
+        if (plan.IsDefault)
+        {
+            await using var unset = connection.CreateCommand();
+            unset.Transaction = transaction;
+            unset.CommandText = "UPDATE app_plans SET is_default = false;";
+            await unset.ExecuteNonQueryAsync();
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO app_plans (id, name, features, ai_daily_limit, ai_monthly_limit, card_limit, sort_order, is_default, created_at)
+            VALUES (@id, @name, @features, @ai_daily_limit, @ai_monthly_limit, @card_limit, @sort_order, @is_default, @created_at)
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                features = EXCLUDED.features,
+                ai_daily_limit = EXCLUDED.ai_daily_limit,
+                ai_monthly_limit = EXCLUDED.ai_monthly_limit,
+                card_limit = EXCLUDED.card_limit,
+                sort_order = EXCLUDED.sort_order,
+                is_default = EXCLUDED.is_default;
+            """;
+        AddPlanParameters(command, plan);
+        await command.ExecuteNonQueryAsync();
+        await transaction.CommitAsync();
+        return plan;
+    }
+
+    public async Task<bool> DeletePlanAsync(string id)
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM app_plans WHERE id = @id AND is_default = false;";
+        command.Parameters.AddWithValue("id", NormalizePlanId(id));
+        return await command.ExecuteNonQueryAsync() > 0;
+    }
+
+    public async Task<PlanDefinition> GetEffectivePlanAsync(string planName)
+    {
+        var plans = await GetPlansAsync();
+        var normalized = NormalizePlanId(planName);
+        return plans.FirstOrDefault(plan => plan.Id.Equals(normalized, StringComparison.OrdinalIgnoreCase)
+            || plan.Name.Equals(planName, StringComparison.OrdinalIgnoreCase))
+            ?? plans.FirstOrDefault(plan => plan.IsDefault)
+            ?? PlanDefinition.Defaults()[0];
+    }
+
+    public async Task<AiUsageSummary> GetAiUsageAsync(string userId, string planName)
+    {
+        await EnsureReadyAsync();
+        var plan = await GetEffectivePlanAsync(planName);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var monthStart = new DateOnly(today.Year, today.Month, 1);
+
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT
+                COALESCE(SUM(CASE WHEN usage_date = @today THEN count ELSE 0 END), 0)::int AS today_count,
+                COALESCE(SUM(CASE WHEN usage_date >= @month_start THEN count ELSE 0 END), 0)::int AS month_count
+            FROM app_ai_usage
+            WHERE user_id = @user_id;
+            """;
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("today", today);
+        command.Parameters.AddWithValue("month_start", monthStart);
+
+        await using var reader = await command.ExecuteReaderAsync();
+        var summary = new AiUsageSummary
+        {
+            DailyLimit = plan.AiDailyLimit,
+            MonthlyLimit = plan.AiMonthlyLimit
+        };
+        if (await reader.ReadAsync())
+        {
+            summary.Today = reader.GetInt32(0);
+            summary.ThisMonth = reader.GetInt32(1);
+        }
+
+        ApplyAiAllowance(summary);
+        return summary;
+    }
+
+    public async Task<AiUsageSummary> TryConsumeAiRequestAsync(string userId, string planName)
+    {
+        var summary = await GetAiUsageAsync(userId, planName);
+        if (!summary.Allowed) return summary;
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO app_ai_usage (user_id, usage_date, count)
+            VALUES (@user_id, @usage_date, 1)
+            ON CONFLICT (user_id, usage_date) DO UPDATE SET count = app_ai_usage.count + 1;
+            """;
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("usage_date", today);
+        await command.ExecuteNonQueryAsync();
+
+        summary.Today++;
+        summary.ThisMonth++;
+        ApplyAiAllowance(summary);
+        return summary;
+    }
+
+    public async Task<AppSettingsState> GetSettingsAsync()
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT value::text FROM app_settings WHERE key = 'app';";
+        var value = await command.ExecuteScalarAsync();
+        return value is string json
+            ? JsonSerializer.Deserialize<AppSettingsState>(json, JsonOptions) ?? new AppSettingsState()
+            : new AppSettingsState();
+    }
+
+    public async Task<AppSettingsState> UpdateSettingsAsync(Action<AppSettingsState> update)
+    {
+        await EnsureReadyAsync();
+        var settings = await GetSettingsAsync();
+        update(settings);
+
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO app_settings (key, value)
+            VALUES ('app', @value)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+            """;
+        command.Parameters.Add("value", NpgsqlDbType.Jsonb).Value = JsonSerializer.Serialize(settings, JsonOptions);
+        await command.ExecuteNonQueryAsync();
+        return settings;
+    }
+
+    public async Task MarkReminderSentAsync(string userId, DateTimeOffset sentAt)
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE app_users SET last_reminder_at = @sent_at WHERE id = @id;";
+        command.Parameters.AddWithValue("id", userId);
+        command.Parameters.AddWithValue("sent_at", sentAt);
+        await command.ExecuteNonQueryAsync();
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_dataSource is not null)
@@ -336,7 +572,9 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            SELECT id, source, display_name, is_active, plan, features::text, access_code, created_at, last_seen_at
+            SELECT id, source, display_name, telegram_id, telegram_username, telegram_chat_id,
+                   is_active, plan, features::text, access_code, reminders_enabled, reminder_hour,
+                   last_reminder_at, created_at, last_seen_at
             FROM app_users
             WHERE id = @id
             FOR UPDATE;
@@ -351,24 +589,40 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO app_users (id, source, display_name, is_active, plan, features, access_code, created_at, last_seen_at)
-            VALUES (@id, @source, @display_name, @is_active, @plan, @features, @access_code, @created_at, @last_seen_at)
+            INSERT INTO app_users
+                (id, source, display_name, telegram_id, telegram_username, telegram_chat_id, is_active, plan,
+                 features, access_code, reminders_enabled, reminder_hour, last_reminder_at, created_at, last_seen_at)
+            VALUES
+                (@id, @source, @display_name, @telegram_id, @telegram_username, @telegram_chat_id, @is_active, @plan,
+                 @features, @access_code, @reminders_enabled, @reminder_hour, @last_reminder_at, @created_at, @last_seen_at)
             ON CONFLICT (id) DO UPDATE SET
                 source = EXCLUDED.source,
                 display_name = EXCLUDED.display_name,
+                telegram_id = EXCLUDED.telegram_id,
+                telegram_username = EXCLUDED.telegram_username,
+                telegram_chat_id = EXCLUDED.telegram_chat_id,
                 is_active = EXCLUDED.is_active,
                 plan = EXCLUDED.plan,
                 features = EXCLUDED.features,
                 access_code = EXCLUDED.access_code,
+                reminders_enabled = EXCLUDED.reminders_enabled,
+                reminder_hour = EXCLUDED.reminder_hour,
+                last_reminder_at = EXCLUDED.last_reminder_at,
                 last_seen_at = EXCLUDED.last_seen_at;
             """;
         command.Parameters.AddWithValue("id", user.Id);
         command.Parameters.AddWithValue("source", user.Source);
         command.Parameters.AddWithValue("display_name", user.DisplayName);
+        command.Parameters.AddWithValue("telegram_id", user.TelegramId);
+        command.Parameters.AddWithValue("telegram_username", user.TelegramUsername);
+        command.Parameters.Add("telegram_chat_id", NpgsqlDbType.Bigint).Value = (object?)user.TelegramChatId ?? DBNull.Value;
         command.Parameters.AddWithValue("is_active", user.IsActive);
         command.Parameters.AddWithValue("plan", user.Plan);
         command.Parameters.Add("features", NpgsqlDbType.Jsonb).Value = JsonSerializer.Serialize(user.Features, JsonOptions);
         command.Parameters.AddWithValue("access_code", user.AccessCode);
+        command.Parameters.AddWithValue("reminders_enabled", user.RemindersEnabled);
+        command.Parameters.Add("reminder_hour", NpgsqlDbType.Integer).Value = (object?)user.ReminderHour ?? DBNull.Value;
+        command.Parameters.Add("last_reminder_at", NpgsqlDbType.TimestampTz).Value = (object?)user.LastReminderAt ?? DBNull.Value;
         command.Parameters.AddWithValue("created_at", user.CreatedAt);
         command.Parameters.AddWithValue("last_seen_at", user.LastSeenAt);
         await command.ExecuteNonQueryAsync();
@@ -469,12 +723,18 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         Id = reader.GetString(0),
         Source = reader.GetString(1),
         DisplayName = reader.GetString(2),
-        IsActive = reader.GetBoolean(3),
-        Plan = reader.GetString(4),
-        Features = DeserializeFeatures(reader.GetString(5)),
-        AccessCode = reader.GetString(6),
-        CreatedAt = reader.GetFieldValue<DateTimeOffset>(7),
-        LastSeenAt = reader.GetFieldValue<DateTimeOffset>(8)
+        TelegramId = reader.GetString(3),
+        TelegramUsername = reader.GetString(4),
+        TelegramChatId = reader.IsDBNull(5) ? null : reader.GetInt64(5),
+        IsActive = reader.GetBoolean(6),
+        Plan = reader.GetString(7),
+        Features = DeserializeFeatures(reader.GetString(8)),
+        AccessCode = reader.GetString(9),
+        RemindersEnabled = reader.GetBoolean(10),
+        ReminderHour = reader.IsDBNull(11) ? null : reader.GetInt32(11),
+        LastReminderAt = reader.IsDBNull(12) ? null : reader.GetFieldValue<DateTimeOffset>(12),
+        CreatedAt = reader.GetFieldValue<DateTimeOffset>(13),
+        LastSeenAt = reader.GetFieldValue<DateTimeOffset>(14)
     };
 
     private static FlashCard ReadCard(NpgsqlDataReader reader) => new()
@@ -503,6 +763,19 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         MaxUses = reader.GetInt32(3),
         Uses = reader.GetInt32(4),
         CreatedAt = reader.GetFieldValue<DateTimeOffset>(5)
+    };
+
+    private static PlanDefinition ReadPlan(NpgsqlDataReader reader) => new()
+    {
+        Id = reader.GetString(0),
+        Name = reader.GetString(1),
+        Features = DeserializeFeatures(reader.GetString(2)),
+        AiDailyLimit = reader.GetInt32(3),
+        AiMonthlyLimit = reader.GetInt32(4),
+        CardLimit = reader.GetInt32(5),
+        SortOrder = reader.GetInt32(6),
+        IsDefault = reader.GetBoolean(7),
+        CreatedAt = reader.GetFieldValue<DateTimeOffset>(8)
     };
 
     private static void AddCardParameters(NpgsqlCommand command, string userId, FlashCard card)
@@ -534,9 +807,57 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         command.Parameters.AddWithValue("created_at", code.CreatedAt);
     }
 
+    private static void AddPlanParameters(NpgsqlCommand command, PlanDefinition plan)
+    {
+        command.Parameters.AddWithValue("id", plan.Id);
+        command.Parameters.AddWithValue("name", plan.Name);
+        command.Parameters.Add("features", NpgsqlDbType.Jsonb).Value = JsonSerializer.Serialize(plan.Features, JsonOptions);
+        command.Parameters.AddWithValue("ai_daily_limit", plan.AiDailyLimit);
+        command.Parameters.AddWithValue("ai_monthly_limit", plan.AiMonthlyLimit);
+        command.Parameters.AddWithValue("card_limit", plan.CardLimit);
+        command.Parameters.AddWithValue("sort_order", plan.SortOrder);
+        command.Parameters.AddWithValue("is_default", plan.IsDefault);
+        command.Parameters.AddWithValue("created_at", plan.CreatedAt);
+    }
+
+    private static async Task SeedPlansAsync(NpgsqlConnection connection)
+    {
+        foreach (var plan in PlanDefinition.Defaults())
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                INSERT INTO app_plans (id, name, features, ai_daily_limit, ai_monthly_limit, card_limit, sort_order, is_default, created_at)
+                VALUES (@id, @name, @features, @ai_daily_limit, @ai_monthly_limit, @card_limit, @sort_order, @is_default, @created_at)
+                ON CONFLICT (id) DO NOTHING;
+                """;
+            AddPlanParameters(command, plan);
+            await command.ExecuteNonQueryAsync();
+        }
+    }
+
     private static FeatureSet DeserializeFeatures(string json)
     {
         return JsonSerializer.Deserialize<FeatureSet>(json, JsonOptions) ?? FeatureSet.AllEnabled();
+    }
+
+    private static string NormalizePlanId(string value)
+    {
+        var normalized = new string((value ?? string.Empty).Trim().ToLowerInvariant()
+            .Select(ch => char.IsLetterOrDigit(ch) ? ch : '-')
+            .ToArray()).Trim('-');
+        return string.IsNullOrWhiteSpace(normalized) ? "free" : normalized;
+    }
+
+    private static void ApplyAiAllowance(AiUsageSummary summary)
+    {
+        var dailyExceeded = summary.DailyLimit > -1 && summary.Today >= summary.DailyLimit;
+        var monthlyExceeded = summary.MonthlyLimit > -1 && summary.ThisMonth >= summary.MonthlyLimit;
+        summary.Allowed = !dailyExceeded && !monthlyExceeded;
+        summary.Message = summary.Allowed
+            ? string.Empty
+            : dailyExceeded
+                ? "سقف روزانه درخواست‌های AI این پلن تمام شده است."
+                : "سقف ماهانه درخواست‌های AI این پلن تمام شده است.";
     }
 
     private static string GenerateCode()
@@ -546,11 +867,14 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         return $"LL-{Convert.ToHexString(bytes)}";
     }
 
+    public static bool HasConnectionString(IConfiguration config)
+    {
+        return !string.IsNullOrWhiteSpace(ReadConnectionString(config));
+    }
+
     private static string GetConnectionString(IConfiguration config)
     {
-        var raw = config["POSTGRES_CONNECTION_STRING"]
-            ?? config["DATABASE_URL"]
-            ?? config.GetConnectionString("Default");
+        var raw = ReadConnectionString(config);
 
         if (string.IsNullOrWhiteSpace(raw))
         {
@@ -576,5 +900,12 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         };
 
         return builder.ConnectionString;
+    }
+
+    private static string? ReadConnectionString(IConfiguration config)
+    {
+        return config["POSTGRES_CONNECTION_STRING"]
+            ?? config["DATABASE_URL"]
+            ?? config.GetConnectionString("Default");
     }
 }

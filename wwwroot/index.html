@@ -43,7 +43,6 @@
       <button class="tab" data-view="add" type="button">افزودن</button>
       <button class="tab" data-view="deck" type="button">کارت‌ها</button>
       <button class="tab" data-view="tools" type="button">ابزار</button>
-      <button class="tab" data-view="admin" type="button">ادمین</button>
     </nav>
 
     <section class="view active" id="reviewView">
@@ -143,6 +142,19 @@
     </section>
 
     <section class="view" id="toolsView">
+      <article class="panel user-info-panel" id="userInfoPanel">
+        <div class="panel-title">
+          <strong>اطلاعات اکانت</strong>
+          <span>این همان شناسه‌ای است که کارت‌ها و پیشرفت مرور با آن ذخیره می‌شود.</span>
+        </div>
+        <div class="profile-grid">
+          <div><small>کاربر</small><strong id="userIdText">-</strong></div>
+          <div><small>پلن</small><strong id="userPlanText">-</strong></div>
+          <div><small>ذخیره‌سازی</small><strong id="storageProviderText">-</strong></div>
+          <div><small>دسترسی‌ها</small><strong id="userFeaturesText">-</strong></div>
+        </div>
+      </article>
+
       <form class="panel settings-form" id="settingsForm">
         <div class="panel-title">
           <strong>تنظیمات کاربر</strong>
@@ -175,34 +187,6 @@
       </article>
     </section>
 
-    <section class="view" id="adminView">
-      <form class="panel" id="adminLoginForm">
-        <div class="panel-title">
-          <strong>پنل ادمین</strong>
-          <span>این مقدار همان ADMIN_TOKEN سرور است. داخل اپ ذخیره محلی می‌شود و فقط برای درخواست‌های ادمین استفاده می‌شود.</span>
-        </div>
-        <input id="adminTokenInput" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
-        <button class="primary-button" type="submit">ورود ادمین</button>
-      </form>
-
-      <article class="panel" id="adminPanel" hidden>
-        <div class="panel-title">
-          <strong>ساخت کد دسترسی</strong>
-          <span>فعلا پیش‌فرض همه قابلیت‌ها باز است؛ بعدا می‌توان پلن‌ها را محدودتر کرد.</span>
-        </div>
-        <div class="admin-grid">
-          <input id="codePlanInput" placeholder="Plan مثلا Free یا Pro">
-          <input id="codeMaxUsesInput" type="number" min="1" value="1">
-          <button class="secondary-button" id="createCodeButton" type="button">ساخت کد</button>
-        </div>
-        <div class="admin-list" id="codesList"></div>
-        <div class="panel-title">
-          <strong>کاربران</strong>
-          <span>کاربران بر اساس شناسه تلگرام جدا ذخیره می‌شوند؛ موبایل و دسکتاپ همان اکانت به کارت‌های یکسان می‌رسند.</span>
-        </div>
-        <div class="admin-list" id="usersList"></div>
-      </article>
-    </section>
   </main>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>

@@ -14,8 +14,18 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
 });
 
-builder.Services.AddSingleton<IAppStore, PostgresAppStore>();
+if (builder.Environment.IsDevelopment() && !PostgresAppStore.HasConnectionString(builder.Configuration))
+{
+    builder.Services.AddSingleton<IAppStore, LocalFileAppStore>();
+}
+else
+{
+    builder.Services.AddSingleton<IAppStore, PostgresAppStore>();
+}
+
 builder.Services.AddHttpClient<OpenRouterCardService>();
+builder.Services.AddHttpClient<TelegramBotService>();
+builder.Services.AddHostedService<ReminderWorker>();
 
 var app = builder.Build();
 
@@ -32,6 +42,20 @@ app.UseExceptionHandler(errorApp =>
     });
 });
 
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.Equals("/admin", StringComparison.OrdinalIgnoreCase)
+        || context.Request.Path.Equals("/admin/", StringComparison.OrdinalIgnoreCase))
+    {
+        var htmlPath = Path.Combine(app.Environment.WebRootPath, "admin-panel", "index.html");
+        context.Response.ContentType = "text/html; charset=utf-8";
+        await context.Response.WriteAsync(await File.ReadAllTextAsync(htmlPath));
+        return;
+    }
+
+    await next();
+});
+
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
@@ -42,7 +66,7 @@ api.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 api.MapGet("/health/db", async (IAppStore store) =>
 {
     await store.EnsureReadyAsync();
-    return Results.Ok(new { status = "ok", database = "postgres" });
+    return Results.Ok(new { status = "ok", database = store.ProviderName });
 });
 
 api.MapGet("/config", async (HttpContext http, IConfiguration config, IAppStore store) =>
@@ -51,15 +75,24 @@ api.MapGet("/config", async (HttpContext http, IConfiguration config, IAppStore 
     if (!user.IsAuthorized) return Results.Unauthorized();
 
     var profile = await store.GetOrCreateUserAsync(user);
+    var settings = await store.GetSettingsAsync();
+    var openRouter = await OpenRouterOptions.FromAsync(config, store);
+    var usage = await store.GetAiUsageAsync(profile.Id, profile.Plan);
     return Results.Ok(new
     {
         userId = profile.Id,
         profile.Source,
         profile.DisplayName,
+        profile.TelegramId,
+        profile.TelegramUsername,
         profile.Plan,
         profile.IsActive,
         profile.Features,
-        openRouterModel = OpenRouterOptions.From(config).DefaultModel,
+        aiUsage = usage,
+        storageProvider = store.ProviderName,
+        adminEnabled = !string.IsNullOrWhiteSpace(config["ADMIN_TOKEN"]),
+        openRouterModel = openRouter.DefaultModel,
+        miniAppUrl = settings.TelegramMiniAppUrl,
         aiServerKeyConfigured = !string.IsNullOrWhiteSpace(config["OPENROUTER_API_KEY"])
     });
 });
@@ -86,7 +119,7 @@ api.MapGet("/cards/due", async (HttpContext http, IConfiguration config, IAppSto
         .Take(25)
         .ToList();
 
-    return Results.Ok(cards);
+    return Results.Ok(cards.Select(FeedbackCardPresenter.ToReviewShape));
 });
 
 api.MapGet("/cards", async (HttpContext http, IConfiguration config, IAppStore store) =>
@@ -95,7 +128,7 @@ api.MapGet("/cards", async (HttpContext http, IConfiguration config, IAppStore s
     if (profile is null) return Results.Unauthorized();
 
     var deck = await store.GetDeckAsync(profile.Id);
-    return Results.Ok(deck.Cards.OrderByDescending(card => card.CreatedAt));
+    return Results.Ok(deck.Cards.OrderByDescending(card => card.CreatedAt).Select(FeedbackCardPresenter.ToReviewShape));
 });
 
 api.MapPost("/cards", async (HttpContext http, IConfiguration config, CreateCardRequest request, IAppStore store) =>
@@ -104,14 +137,16 @@ api.MapPost("/cards", async (HttpContext http, IConfiguration config, CreateCard
     if (profile is null) return Results.Unauthorized();
     if (request.Type == CardType.Feedback && !profile.Features.FeedbackCards) return Results.Forbid();
 
+    request = NormalizeFeedbackRequest(request);
     if (string.IsNullOrWhiteSpace(request.Front) || string.IsNullOrWhiteSpace(request.Back))
     {
         return Results.BadRequest(new { message = "روی کارت و پشت کارت را کامل وارد کنید." });
     }
 
-    if (!profile.Features.UnlimitedCards && (await store.GetDeckAsync(profile.Id)).Cards.Count >= 50)
+    var plan = await store.GetEffectivePlanAsync(profile.Plan);
+    if (plan.CardLimit > -1 && (await store.GetDeckAsync(profile.Id)).Cards.Count >= plan.CardLimit)
     {
-        return Results.Forbid();
+        return Results.BadRequest(new { message = "سقف تعداد کارت‌های این پلن پر شده است." });
     }
 
     var card = new FlashCard
@@ -130,7 +165,7 @@ api.MapPost("/cards", async (HttpContext http, IConfiguration config, CreateCard
     };
 
     await store.AddCardAsync(profile.Id, card);
-    return Results.Created($"/api/cards/{card.Id}", card);
+    return Results.Created($"/api/cards/{card.Id}", FeedbackCardPresenter.ToReviewShape(card));
 });
 
 api.MapPost("/cards/{id:guid}/review", async (
@@ -234,8 +269,20 @@ api.MapPost("/ai/complete", async (AiCompleteRequest request, HttpContext http, 
         return Results.BadRequest(new { message = "OPENROUTER_API_KEY را روی سرور بگذارید یا کلید را در تنظیمات اپ وارد کنید." });
     }
 
-    var card = await ai.CompleteAsync(request, apiKey);
+    var quota = await store.TryConsumeAiRequestAsync(profile.Id, profile.Plan);
+    if (!quota.Allowed)
+    {
+        return Results.Json(new { message = quota.Message, usage = quota }, statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
+    var card = NormalizeFeedbackRequest(await ai.CompleteAsync(request, apiKey));
     return Results.Ok(card);
+});
+
+api.MapPost("/bot/webhook", async (JsonElement update, TelegramBotService bot) =>
+{
+    await bot.HandleUpdateAsync(update);
+    return Results.Ok(new { ok = true });
 });
 
 var admin = api.MapGroup("/admin");
@@ -255,6 +302,8 @@ admin.MapPut("/users/{id}", async (HttpContext http, IConfiguration config, stri
         if (request.IsActive.HasValue) user.IsActive = request.IsActive.Value;
         if (!string.IsNullOrWhiteSpace(request.Plan)) user.Plan = request.Plan.Trim();
         if (request.Features is not null) user.Features = request.Features;
+        if (request.RemindersEnabled.HasValue) user.RemindersEnabled = request.RemindersEnabled.Value;
+        if (request.ReminderHour.HasValue) user.ReminderHour = request.ReminderHour.Value;
     });
 
     return profile is null ? Results.NotFound() : Results.Ok(profile);
@@ -271,6 +320,77 @@ admin.MapGet("/codes", async (HttpContext http, IConfiguration config, IAppStore
 {
     if (!IsAdmin(http, config)) return Results.Unauthorized();
     return Results.Ok(await store.GetAccessCodesAsync());
+});
+
+admin.MapGet("/plans", async (HttpContext http, IConfiguration config, IAppStore store) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    return Results.Ok(await store.GetPlansAsync());
+});
+
+admin.MapPut("/plans/{id}", async (HttpContext http, IConfiguration config, string id, UpsertPlanRequest request, IAppStore store) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+
+    var plan = new PlanDefinition
+    {
+        Id = id,
+        Name = request.Name,
+        Features = request.Features,
+        AiDailyLimit = request.AiDailyLimit,
+        AiMonthlyLimit = request.AiMonthlyLimit,
+        CardLimit = request.CardLimit,
+        SortOrder = request.SortOrder,
+        IsDefault = request.IsDefault,
+        CreatedAt = DateTimeOffset.UtcNow
+    };
+    return Results.Ok(await store.UpsertPlanAsync(plan));
+});
+
+admin.MapDelete("/plans/{id}", async (HttpContext http, IConfiguration config, string id, IAppStore store) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    return await store.DeletePlanAsync(id) ? Results.NoContent() : Results.BadRequest(new { message = "پلن پیش‌فرض یا پلن ناموجود حذف نشد." });
+});
+
+admin.MapGet("/settings", async (HttpContext http, IConfiguration config, IAppStore store) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    var settings = await store.GetSettingsAsync();
+    var openRouter = await OpenRouterOptions.FromAsync(config, store);
+    return Results.Ok(new { settings, effectiveOpenRouter = openRouter });
+});
+
+admin.MapPut("/settings", async (HttpContext http, IConfiguration config, UpdateSettingsRequest request, IAppStore store) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+
+    var settings = await store.UpdateSettingsAsync(current =>
+    {
+        if (request.OpenRouterModel is not null) current.OpenRouterModel = request.OpenRouterModel.Trim();
+        if (request.OpenRouterReferer is not null) current.OpenRouterReferer = request.OpenRouterReferer.Trim();
+        if (request.PublicBaseUrl is not null) current.PublicBaseUrl = request.PublicBaseUrl.Trim().TrimEnd('/');
+        if (request.TelegramBotUsername is not null) current.TelegramBotUsername = request.TelegramBotUsername.Trim().TrimStart('@');
+        if (request.TelegramMiniAppUrl is not null) current.TelegramMiniAppUrl = request.TelegramMiniAppUrl.Trim();
+        if (request.BotEnabled.HasValue) current.BotEnabled = request.BotEnabled.Value;
+        if (request.RemindersEnabled.HasValue) current.RemindersEnabled = request.RemindersEnabled.Value;
+        if (request.ReminderHour.HasValue) current.ReminderHour = Math.Clamp(request.ReminderHour.Value, 0, 23);
+    });
+
+    return Results.Ok(settings);
+});
+
+admin.MapPost("/bot/set-webhook", async (HttpContext http, IConfiguration config, IAppStore store, TelegramBotService bot) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    var settings = await store.GetSettingsAsync();
+    var baseUrl = settings.PublicBaseUrl.TrimEnd('/');
+    if (string.IsNullOrWhiteSpace(baseUrl))
+    {
+        return Results.BadRequest(new { message = "اول Public Base URL را در تنظیمات ادمین وارد کن." });
+    }
+
+    return Results.Ok(await bot.SetWebhookAsync($"{baseUrl}/api/bot/webhook"));
 });
 
 app.Run();
@@ -292,4 +412,38 @@ static bool IsAdmin(HttpContext http, IConfiguration config)
     var actual = http.Request.Headers["X-Admin-Token"].FirstOrDefault();
     return !string.IsNullOrWhiteSpace(actual)
         && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(actual), Encoding.UTF8.GetBytes(expected));
+}
+
+static CreateCardRequest NormalizeFeedbackRequest(CreateCardRequest request)
+{
+    if (request.Type != CardType.Feedback) return request;
+
+    var parsed = FeedbackCardPresenter.Parse(request.Front);
+    if (string.IsNullOrWhiteSpace(parsed.Wrong))
+    {
+        parsed = FeedbackCardPresenter.Parse(request.Prompt ?? string.Empty);
+    }
+
+    var correct = !string.IsNullOrWhiteSpace(parsed.Correct)
+        ? parsed.Correct
+        : request.Answer ?? string.Empty;
+    var front = !string.IsNullOrWhiteSpace(parsed.Wrong)
+        ? $"Correct this: {parsed.Wrong}"
+        : request.Front.Trim();
+    var answer = string.IsNullOrWhiteSpace(correct) ? request.Answer : correct;
+    var backParts = new[]
+    {
+        string.IsNullOrWhiteSpace(correct) ? string.Empty : $"Correct: {correct}",
+        string.IsNullOrWhiteSpace(request.Back) && string.IsNullOrWhiteSpace(correct)
+            ? "این فیدبک نیاز به تکمیل توضیح دارد."
+            : request.Back
+    }.Where(part => !string.IsNullOrWhiteSpace(part));
+
+    return request with
+    {
+        Front = front,
+        Back = string.Join("\n\n", backParts),
+        Prompt = string.IsNullOrWhiteSpace(request.Prompt) ? front : request.Prompt,
+        Answer = answer
+    };
 }

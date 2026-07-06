@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LinguaLite Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/admin-panel/admin.css">
+</head>
+<body>
+  <main class="admin-shell">
+    <header class="admin-header">
+      <div>
+        <p>LinguaLite</p>
+        <h1>پنل مدیریت</h1>
+      </div>
+      <a class="secondary-button admin-link" href="/">بازگشت به اپ</a>
+    </header>
+
+    <form class="panel admin-login" id="adminLoginForm">
+      <div class="panel-title">
+        <strong>ورود ادمین</strong>
+        <span>این صفحه از مینی‌اپ جداست و فقط با `ADMIN_TOKEN` سرور کار می‌کند.</span>
+      </div>
+      <div class="admin-row">
+        <input id="adminTokenInput" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
+        <button class="primary-button compact" type="submit">ورود</button>
+        <button class="secondary-button compact" id="adminLogoutButton" type="button" hidden>خروج</button>
+      </div>
+      <p class="admin-status" id="adminStatus">وارد نشده‌ای.</p>
+    </form>
+
+    <section class="admin-dashboard" id="adminDashboard" hidden>
+      <section class="admin-stats">
+        <article class="stat strong"><small>کاربران</small><span id="usersCount">۰</span></article>
+        <article class="stat"><small>پلن‌ها</small><span id="plansCount">۰</span></article>
+        <article class="stat"><small>کدها</small><span id="codesCount">۰</span></article>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <strong>تنظیمات اپ و ربات</strong>
+          <span>مدل OpenRouter، آدرس عمومی، لینک Mini App و یادآوری‌های ربات از اینجا کنترل می‌شود.</span>
+        </div>
+        <form class="settings-grid" id="settingsForm">
+          <label><span>OpenRouter Model</span><input id="openRouterModelInput" placeholder="google/gemma-4-31b-it:free"></label>
+          <label><span>OpenRouter Referer</span><input id="openRouterRefererInput" placeholder="https://your-domain.com"></label>
+          <label><span>Public Base URL</span><input id="publicBaseUrlInput" placeholder="https://app.example.com"></label>
+          <label><span>Telegram Mini App URL</span><input id="miniAppUrlInput" placeholder="https://app.example.com"></label>
+          <label><span>Bot Username</span><input id="botUsernameInput" placeholder="YourBot"></label>
+          <label><span>ساعت یادآوری UTC</span><input id="reminderHourInput" type="number" min="0" max="23" value="9"></label>
+          <label class="check-row"><input id="botEnabledInput" type="checkbox"> <span>ربات فعال باشد</span></label>
+          <label class="check-row"><input id="remindersEnabledInput" type="checkbox"> <span>یادآوری‌ها فعال باشد</span></label>
+          <button class="primary-button" type="submit">ذخیره تنظیمات</button>
+          <button class="secondary-button" id="setWebhookButton" type="button">تنظیم Webhook ربات</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <strong>پلن‌ها و محدودیت AI</strong>
+          <span>کارت‌ها را بکش و جابه‌جا کن؛ هر پلن سقف AI و کارت خودش را دارد. مقدار `-1` یعنی نامحدود.</span>
+        </div>
+        <div class="plan-actions">
+          <input id="newPlanNameInput" placeholder="نام پلن جدید مثلا Starter">
+          <button class="secondary-button" id="addPlanButton" type="button">افزودن پلن</button>
+        </div>
+        <div class="plans-board" id="plansBoard"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <strong>کاربران</strong>
+          <span>شناسه تلگرام، username، پلن، یادآوری و وضعیت هر کاربر اینجا مدیریت می‌شود.</span>
+        </div>
+        <div class="admin-list" id="usersList"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">
+          <strong>کدهای دسترسی</strong>
+          <span>کد بساز تا کاربر با وارد کردن آن پلن و دسترسی‌ها را بگیرد.</span>
+        </div>
+        <div class="admin-grid">
+          <select id="codePlanInput"></select>
+          <input id="codeMaxUsesInput" type="number" min="1" value="1">
+          <button class="secondary-button" id="createCodeButton" type="button">ساخت کد</button>
+        </div>
+        <div class="admin-list" id="codesList"></div>
+      </section>
+    </section>
+  </main>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/admin-panel/admin.js"></script>
+</body>
+</html>

@@ -2,13 +2,13 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 
-public sealed class OpenRouterCardService(HttpClient httpClient, IConfiguration configuration)
+public sealed class OpenRouterCardService(HttpClient httpClient, IConfiguration configuration, IAppStore store)
 {
     private static readonly JsonSerializerOptions JsonOptions = AppJsonOptions.CreateCompact();
 
     public async Task<CreateCardRequest> CompleteAsync(AiCompleteRequest request, string apiKey)
     {
-        var options = OpenRouterOptions.From(configuration);
+        var options = await OpenRouterOptions.FromAsync(configuration, store);
         var type = request.Type ?? CardType.Word;
         var prompt = type == CardType.Feedback
             ? FeedbackPrompt(request.Text)
@@ -61,8 +61,8 @@ public sealed class OpenRouterCardService(HttpClient httpClient, IConfiguration 
         The learner writes a mistake, correction, or teacher feedback. Build a feedback flashcard, not a vocabulary card.
         Return JSON with exactly these keys: front, back, example, prompt, answer, notes, type.
         type must be "Feedback".
-        front: show the learner's wrong form and the corrected form, for example "wrong: I programmer -> correct: I am a programmer".
-        back: Persian explanation of the exact grammar/vocabulary problem and why the correction is needed.
+        front: do NOT reveal the correction. Put only a correction task or the wrong sentence, for example "Correct this: I programmer".
+        back: the corrected sentence plus Persian explanation of the exact grammar/vocabulary problem.
         example: a correct natural English example using the fixed pattern.
         prompt: ask the learner to correct the original mistake or explain the rule.
         answer: the corrected sentence and the shortest rule.
@@ -103,4 +103,13 @@ public sealed record OpenRouterOptions(string DefaultModel, string Referer)
     public static OpenRouterOptions From(IConfiguration config) => new(
         config["OPENROUTER_MODEL"] ?? config["OpenRouter:DefaultModel"] ?? "google/gemma-4-31b-it:free",
         config["OPENROUTER_REFERER"] ?? config["OpenRouter:Referer"] ?? "https://lingualite.local");
+
+    public static async Task<OpenRouterOptions> FromAsync(IConfiguration config, IAppStore store)
+    {
+        var settings = await store.GetSettingsAsync();
+        var fallback = From(config);
+        return new OpenRouterOptions(
+            string.IsNullOrWhiteSpace(settings.OpenRouterModel) ? fallback.DefaultModel : settings.OpenRouterModel,
+            string.IsNullOrWhiteSpace(settings.OpenRouterReferer) ? fallback.Referer : settings.OpenRouterReferer);
+    }
 }
