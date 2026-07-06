@@ -12,6 +12,7 @@ WORKDIR /app
 
 ENV ASPNETCORE_URLS=http://+:80
 ENV DATA_DIR=/data
+ENV OPENROUTER_MODEL=google/gemma-4-31b-it:free
 
 COPY --from=build /app/publish ./
 RUN mkdir -p /data

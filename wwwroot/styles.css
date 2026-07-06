@@ -189,7 +189,7 @@ textarea:focus {
   top: max(8px, env(safe-area-inset-top));
   z-index: 10;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   gap: 5px;
   padding: 5px;
   border: 1px solid var(--line);
@@ -401,6 +401,48 @@ textarea:focus {
   gap: 8px;
 }
 
+.tool-row,
+.admin-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.file-button {
+  min-height: 48px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 900;
+}
+
+.file-button input {
+  display: none;
+}
+
+.admin-list {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-item {
+  display: grid;
+  gap: 4px;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.admin-item small {
+  color: var(--muted);
+  direction: ltr;
+  text-align: left;
+}
+
 .segmented {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -546,6 +588,8 @@ textarea:focus {
   }
 
   .ai-row,
+  .tool-row,
+  .admin-grid,
   .segmented {
     grid-template-columns: 1fr;
   }

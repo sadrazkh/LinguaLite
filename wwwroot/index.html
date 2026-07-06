@@ -16,7 +16,7 @@
       <div class="brand">
         <div class="brand-mark" aria-hidden="true">L</div>
         <div>
-          <p>LinguaLite</p>
+          <p id="profileText">LinguaLite</p>
           <h1>لایتنر زبان</h1>
         </div>
       </div>
@@ -42,7 +42,8 @@
       <button class="tab active" data-view="review" type="button">مرور</button>
       <button class="tab" data-view="add" type="button">افزودن</button>
       <button class="tab" data-view="deck" type="button">کارت‌ها</button>
-      <button class="tab" data-view="settings" type="button">تنظیمات</button>
+      <button class="tab" data-view="tools" type="button">ابزار</button>
+      <button class="tab" data-view="admin" type="button">ادمین</button>
     </nav>
 
     <section class="view active" id="reviewView">
@@ -54,15 +55,12 @@
         <div class="box-progress" id="boxProgress" aria-label="جایگاه در لایتنر">
           <i></i><i></i><i></i><i></i><i></i>
         </div>
-
         <div class="flash-face">
           <small>روی کارت</small>
           <div class="prompt" id="frontText">در حال آماده‌سازی...</div>
           <p class="example" id="exampleText"></p>
         </div>
-
         <button class="primary-button" id="revealButton" type="button">نمایش جواب</button>
-
         <div class="answer-panel" id="answerPanel" hidden>
           <small>پشت کارت</small>
           <p id="backText"></p>
@@ -73,7 +71,6 @@
           </div>
         </div>
       </article>
-
       <div class="empty-state" id="emptyState" hidden>
         <strong>فعلا کارت آماده مرور نداری.</strong>
         <span>از بخش افزودن یک کارت بساز یا بعدا برگرد.</span>
@@ -81,13 +78,13 @@
     </section>
 
     <section class="view" id="addView">
-      <article class="panel ai-panel">
+      <article class="panel">
         <div class="panel-title">
           <strong>تکمیل خودکار با OpenRouter</strong>
-          <span>کلمه یا عبارت را بده، فیلدهای کارت را پر می‌کند.</span>
+          <span id="modelText">مدل از تنظیمات سرور خوانده می‌شود.</span>
         </div>
         <div class="ai-row">
-          <input id="aiWordInput" autocomplete="off" placeholder="مثلا: take for granted">
+          <input id="aiWordInput" autocomplete="off" placeholder="لغت، عبارت یا فیدبک مثل: I programmer">
           <button class="primary-button compact" id="completeAiButton" type="button">پر کن</button>
         </div>
       </article>
@@ -95,40 +92,38 @@
       <form class="panel card-form" id="cardForm">
         <div class="panel-title">
           <strong>کارت جدید</strong>
-          <span>بعد از تکمیل، کارت را به لایتنر خودت اضافه کن.</span>
+          <span>نوع کارت را انتخاب کن؛ برای Feedback متن اشتباه یا فیدبک استاد را بده.</span>
         </div>
-
         <div class="segmented" role="group" aria-label="نوع کارت">
           <label><input type="radio" name="type" value="Word" checked> لغت</label>
           <label><input type="radio" name="type" value="Sentence"> جمله</label>
           <label><input type="radio" name="type" value="Question"> پرسش</label>
+          <label><input type="radio" name="type" value="Feedback"> فیدبک</label>
         </div>
-
         <label>
           <span>روی کارت</span>
-          <input id="frontInput" name="front" autocomplete="off" placeholder="inevitable" required>
+          <input id="frontInput" name="front" autocomplete="off" placeholder="wrong: I programmer → correct: I am a programmer" required>
         </label>
         <label>
-          <span>معنی / پشت کارت</span>
-          <textarea id="backInput" name="back" rows="3" placeholder="اجتناب‌ناپذیر" required></textarea>
+          <span>توضیح / پشت کارت</span>
+          <textarea id="backInput" name="back" rows="3" placeholder="توضیح فارسی یا معنی" required></textarea>
         </label>
         <label>
-          <span>جمله نمونه</span>
-          <textarea id="exampleInput" name="example" rows="2" placeholder="It was an inevitable decision."></textarea>
+          <span>مثال درست</span>
+          <textarea id="exampleInput" name="example" rows="2" placeholder="I am a programmer."></textarea>
         </label>
         <label>
           <span>سؤال تمرینی</span>
-          <input id="promptInput" name="prompt" autocomplete="off" placeholder="When do we use this word?">
+          <input id="promptInput" name="prompt" autocomplete="off" placeholder="Correct this sentence: I programmer.">
         </label>
         <label>
           <span>جواب پیشنهادی</span>
-          <input id="answerInput" name="answer" autocomplete="off" placeholder="When something cannot be avoided.">
+          <input id="answerInput" name="answer" autocomplete="off" placeholder="I am a programmer.">
         </label>
         <label>
           <span>یادداشت</span>
-          <input id="notesInput" name="notes" autocomplete="off" placeholder="رسمی، مناسب writing">
+          <input id="notesInput" name="notes" autocomplete="off" placeholder="نکته گرامری، خطای رایج، الگو">
         </label>
-
         <button class="primary-button" type="submit">افزودن به لایتنر</button>
       </form>
     </section>
@@ -138,26 +133,66 @@
       <div class="deck-list" id="deckList"></div>
     </section>
 
-    <section class="view" id="settingsView">
+    <section class="view" id="toolsView">
       <form class="panel settings-form" id="settingsForm">
         <div class="panel-title">
-          <strong>تنظیمات AI</strong>
-          <span>کلید فقط روی دستگاه همین کاربر ذخیره می‌شود و به سرور ارسال دائمی نمی‌شود.</span>
+          <strong>تنظیمات کاربر</strong>
+          <span>اگر کلید روی سرور تنظیم نشده باشد، می‌توانی کلید OpenRouter خودت را اینجا بگذاری.</span>
         </div>
         <label>
           <span>OpenRouter API Key</span>
           <input id="apiKeyInput" type="password" autocomplete="off" placeholder="sk-or-v1-...">
         </label>
         <label>
-          <span>مدل</span>
-          <input id="modelInput" autocomplete="off" placeholder="google/gemma-4-31b-it:free">
-        </label>
-        <label>
-          <span>دستور آماده تکمیل کارت</span>
-          <textarea id="promptTemplate" rows="7" readonly></textarea>
+          <span>کد فعال‌سازی</span>
+          <input id="redeemCodeInput" autocomplete="off" placeholder="LL-...">
         </label>
         <button class="primary-button" type="submit">ذخیره تنظیمات</button>
+        <button class="secondary-button" id="redeemCodeButton" type="button">فعال‌سازی کد</button>
       </form>
+
+      <article class="panel">
+        <div class="panel-title">
+          <strong>خروجی و ورودی دیتا</strong>
+          <span>برای جابه‌جایی کارت‌ها بین اکانت‌ها یا بکاپ گرفتن.</span>
+        </div>
+        <div class="tool-row">
+          <button class="secondary-button" id="exportButton" type="button">Export JSON</button>
+          <label class="file-button">
+            Import JSON
+            <input id="importFileInput" type="file" accept="application/json">
+          </label>
+        </div>
+      </article>
+    </section>
+
+    <section class="view" id="adminView">
+      <form class="panel" id="adminLoginForm">
+        <div class="panel-title">
+          <strong>پنل ادمین</strong>
+          <span>توکن ادمین از env سرور خوانده می‌شود. اینجا فقط برای درخواست‌های پنل واردش کن.</span>
+        </div>
+        <input id="adminTokenInput" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
+        <button class="primary-button" type="submit">ورود ادمین</button>
+      </form>
+
+      <article class="panel" id="adminPanel" hidden>
+        <div class="panel-title">
+          <strong>ساخت کد دسترسی</strong>
+          <span>پیش‌فرض همه قابلیت‌ها باز است؛ می‌توانی از پنل دسترسی کاربران را کنترل کنی.</span>
+        </div>
+        <div class="admin-grid">
+          <input id="codePlanInput" placeholder="Plan مثلا Free یا Pro">
+          <input id="codeMaxUsesInput" type="number" min="1" value="1">
+          <button class="secondary-button" id="createCodeButton" type="button">ساخت کد</button>
+        </div>
+        <div class="admin-list" id="codesList"></div>
+        <div class="panel-title">
+          <strong>کاربران</strong>
+          <span>فعال/غیرفعال و سطح دسترسی کاربران اینجا دیده می‌شود.</span>
+        </div>
+        <div class="admin-list" id="usersList"></div>
+      </article>
     </section>
   </main>
 

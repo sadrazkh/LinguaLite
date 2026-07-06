@@ -1,6 +1,6 @@
 # LinguaLite
 
-مینی‌اپ تلگرام برای یادگیری زبان با لایتنر، دیتای جدا برای هر کاربر، و تکمیل خودکار کارت با OpenRouter.
+مینی‌اپ تلگرام برای یادگیری زبان با لایتنر، دیتای جدا برای هر کاربر، کارت فیدبک، خروجی/ورودی دیتا، پنل ادمین و تکمیل خودکار با OpenRouter.
 
 ## اجرای لوکال
 
@@ -8,28 +8,26 @@
 dotnet run
 ```
 
-برای باز کردن پروژه از `LinguaLite.sln` استفاده کنید.
+پروژه با `LinguaLite.sln` باز می‌شود.
 
-## CapRover
+## تنظیمات CapRover
 
-این فایل‌ها باید در ریشه پروژه باشند:
-
-- `captain-definition`
-- `Dockerfile`
-- `.dockerignore`
-
-در CapRover برای اپ `lingua-lite` این envها را بگذارید:
+Envهای اصلی:
 
 ```text
 DATA_DIR=/data
 TELEGRAM_BOT_TOKEN=توکن_بات_تلگرام
+ADMIN_TOKEN=یک_توکن_قوی_برای_ادمین
+OPENROUTER_MODEL=google/gemma-4-31b-it:free
 ```
 
-`OPENROUTER_API_KEY` اختیاری است. اگر آن را نگذاری، هر کاربر می‌تواند API key خودش را در بخش تنظیمات اپ وارد کند.
+کلید OpenRouter اختیاری است. اگر روی سرور بگذاری، همه کاربران از همان استفاده می‌کنند:
 
 ```text
 OPENROUTER_API_KEY=sk-or-v1-...
 ```
+
+اگر نگذاری، کاربر می‌تواند کلید خودش را در بخش ابزار وارد کند.
 
 Volume پایدار:
 
@@ -38,15 +36,30 @@ Path in App: /data
 Label: lingua-lite-data
 ```
 
-دیتای هر کاربر جدا ذخیره می‌شود:
+داده‌ها در فایل زیر ذخیره می‌شوند:
 
 ```text
-/data/users/tg_TELEGRAM_USER_ID/deck.json
+/data/database.json
 ```
 
-اگر `TELEGRAM_BOT_TOKEN` تنظیم باشد، API فقط `initData` معتبر تلگرام را قبول می‌کند.
+شناسه کاربر تلگرام (`tg_USER_ID`) مبنای ذخیره‌سازی است؛ بنابراین همان کاربر روی موبایل و دسکتاپ به همان کارت‌ها می‌رسد.
+
+## قابلیت‌ها
+
+- کارت‌های Word، Sentence، Question و Feedback
+- تکمیل کارت با OpenRouter
+- Export و Import کارت‌ها با JSON
+- کد فعال‌سازی برای باز کردن قابلیت‌ها
+- پنل ادمین برای دیدن کاربران و ساخت access code
+- کنترل active/plan/features از API ادمین
 
 ## Deploy
+
+فایل‌های CapRover در ریشه پروژه هستند:
+
+- `captain-definition`
+- `Dockerfile`
+- `.dockerignore`
 
 با CLI:
 
@@ -54,38 +67,14 @@ Label: lingua-lite-data
 caprover deploy
 ```
 
-یا از داشبورد CapRover همین پوشه را zip کنید. دقت کنید `captain-definition` باید در ریشه zip باشد، نه داخل یک فولدر اضافه.
-
-## اتصال تلگرام
-
-در `@BotFather`:
-
-1. `/mybots`
-2. انتخاب بات
-3. `Bot Settings`
-4. `Configure Mini App`
-5. `Enable Mini App`
-6. آدرس HTTPS اپ را بدهید.
-
-برای دکمه پایین چت:
-
-```text
-/setmenubutton
-```
+یا از داشبورد CapRover همین پوشه را zip کنید. `captain-definition` باید در ریشه zip باشد.
 
 ## OpenRouter
 
-در بخش تنظیمات اپ:
-
-- `OpenRouter API Key`
-- `Model`
-
-مدل پیش‌فرض رایگان:
+مدل پیش‌فرض فعلی:
 
 ```text
 google/gemma-4-31b-it:free
 ```
 
-این مدل رایگان، instruction-tuned و text-to-text است و طبق لیست مدل‌های OpenRouter از `response_format` پشتیبانی می‌کند؛ برای ساخت JSON تمیز کارت لغت از مدل‌های رایگان تخصصی code یا safety مناسب‌تر است.
-
-بعد در بخش افزودن، فقط کلمه یا عبارت را بنویسید و دکمه `پر کن` را بزنید تا فیلدهای کارت کامل شوند.
+مدل از config سرور می‌آید، نه از UI کاربر. برای تغییر مدل، مقدار `OPENROUTER_MODEL` را عوض کنید.
