@@ -22,6 +22,8 @@ public sealed class UserProfile
 public sealed class FeatureSet
 {
     public bool Ai { get; set; } = true;
+    public bool Dictionary { get; set; } = true;
+    public bool TextCorrection { get; set; } = true;
     public bool ExportImport { get; set; } = true;
     public bool FeedbackCards { get; set; } = true;
     public bool UnlimitedCards { get; set; } = true;
@@ -33,9 +35,15 @@ public sealed class PlanDefinition
 {
     public string Id { get; set; } = "free";
     public string Name { get; set; } = "Free";
+    public string BadgeColor { get; set; } = "#16a34a";
+    public string BadgeTextColor { get; set; } = "#ffffff";
     public FeatureSet Features { get; set; } = FeatureSet.AllEnabled();
     public int AiDailyLimit { get; set; } = 20;
     public int AiMonthlyLimit { get; set; } = 300;
+    public int DictionaryDailyLimit { get; set; } = 30;
+    public int DictionaryMonthlyLimit { get; set; } = 600;
+    public int CorrectionDailyLimit { get; set; } = 15;
+    public int CorrectionMonthlyLimit { get; set; } = 300;
     public int CardLimit { get; set; } = 200;
     public int SortOrder { get; set; }
     public bool IsDefault { get; set; }
@@ -47,9 +55,15 @@ public sealed class PlanDefinition
         {
             Id = "free",
             Name = "Free",
+            BadgeColor = "#16a34a",
+            BadgeTextColor = "#ffffff",
             Features = FeatureSet.AllEnabled(),
             AiDailyLimit = 20,
             AiMonthlyLimit = 300,
+            DictionaryDailyLimit = 30,
+            DictionaryMonthlyLimit = 600,
+            CorrectionDailyLimit = 15,
+            CorrectionMonthlyLimit = 300,
             CardLimit = 200,
             SortOrder = 0,
             IsDefault = true,
@@ -59,9 +73,15 @@ public sealed class PlanDefinition
         {
             Id = "pro",
             Name = "Pro",
+            BadgeColor = "#2563eb",
+            BadgeTextColor = "#ffffff",
             Features = FeatureSet.AllEnabled(),
             AiDailyLimit = -1,
             AiMonthlyLimit = -1,
+            DictionaryDailyLimit = -1,
+            DictionaryMonthlyLimit = -1,
+            CorrectionDailyLimit = -1,
+            CorrectionMonthlyLimit = -1,
             CardLimit = -1,
             SortOrder = 1,
             IsDefault = false,
@@ -72,12 +92,20 @@ public sealed class PlanDefinition
 
 public sealed class AiUsageSummary
 {
+    public string Tool { get; set; } = "card";
     public int Today { get; set; }
     public int ThisMonth { get; set; }
     public int DailyLimit { get; set; }
     public int MonthlyLimit { get; set; }
     public bool Allowed { get; set; } = true;
     public string Message { get; set; } = string.Empty;
+}
+
+public enum AiToolKind
+{
+    Card,
+    Dictionary,
+    Correction
 }
 
 public sealed class AppSettingsState
@@ -179,13 +207,19 @@ public sealed record UserIdentity(
 public sealed record TelegramUser(string Id, string Name, string Username);
 public sealed record CreateCardRequest(string Front, string Back, string? Example, string? Prompt, string? Answer, string? Notes, CardType Type = CardType.Word);
 public sealed record AiCompleteRequest(string Text, CardType? Type);
+public sealed record DictionaryRequest(string Text);
+public sealed record CorrectionRequest(string Text);
+public sealed record DictionaryResult(string Word, string Pronunciation, string PartOfSpeech, string PersianMeaning, string EnglishDefinition, string[] Synonyms, string[] Examples, string Notes);
+public sealed record CorrectionIssue(string Original, string Corrected, string Reason, string Severity);
+public sealed record CorrectionResult(string Original, string Corrected, string PersianTranslation, string OverallNote, CorrectionIssue[] Issues, string[] BetterAlternatives);
 public sealed record ReviewRequest(bool Remembered);
 public sealed record ImportRequest(List<FlashCard> Cards, ImportMode Mode = ImportMode.Merge);
 public sealed record ExportPayload(string UserId, DateTimeOffset ExportedAt, List<FlashCard> Cards);
 public sealed record RedeemCodeRequest(string Code);
 public sealed record AdminUpdateUserRequest(bool? IsActive, string? Plan, FeatureSet? Features, bool? RemindersEnabled, int? ReminderHour);
 public sealed record CreateAccessCodeRequest(string? Code, string? Plan, FeatureSet? Features, int? MaxUses);
-public sealed record UpsertPlanRequest(string Id, string Name, FeatureSet Features, int AiDailyLimit, int AiMonthlyLimit, int CardLimit, int SortOrder, bool IsDefault);
+public sealed record UpdateCardRequest(string Front, string Back, string? Example, string? Prompt, string? Answer, string? Notes, CardType Type = CardType.Word);
+public sealed record UpsertPlanRequest(string Id, string Name, string? BadgeColor, string? BadgeTextColor, FeatureSet Features, int AiDailyLimit, int AiMonthlyLimit, int DictionaryDailyLimit, int DictionaryMonthlyLimit, int CorrectionDailyLimit, int CorrectionMonthlyLimit, int CardLimit, int SortOrder, bool IsDefault);
 public sealed record UpdateSettingsRequest(string? OpenRouterModel, string? OpenRouterReferer, string? PublicBaseUrl, string? TelegramBotUsername, string? TelegramMiniAppUrl, bool? BotEnabled, bool? RemindersEnabled, int? ReminderHour);
 public sealed record TelegramWebhookRequest(JsonElement Update);
 public sealed record RedeemResult(bool Success, string Message, UserProfile? Profile)

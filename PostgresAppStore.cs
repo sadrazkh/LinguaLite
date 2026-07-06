@@ -83,20 +83,41 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                 CREATE TABLE IF NOT EXISTS app_plans (
                     id text PRIMARY KEY,
                     name text NOT NULL,
+                    badge_color text NOT NULL DEFAULT '#16a34a',
+                    badge_text_color text NOT NULL DEFAULT '#ffffff',
                     features jsonb NOT NULL DEFAULT '{}'::jsonb,
                     ai_daily_limit integer NOT NULL DEFAULT 20,
                     ai_monthly_limit integer NOT NULL DEFAULT 300,
+                    dictionary_daily_limit integer NOT NULL DEFAULT 30,
+                    dictionary_monthly_limit integer NOT NULL DEFAULT 600,
+                    correction_daily_limit integer NOT NULL DEFAULT 15,
+                    correction_monthly_limit integer NOT NULL DEFAULT 300,
                     card_limit integer NOT NULL DEFAULT 200,
                     sort_order integer NOT NULL DEFAULT 0,
                     is_default boolean NOT NULL DEFAULT false,
                     created_at timestamptz NOT NULL
                 );
 
+                ALTER TABLE app_plans ADD COLUMN IF NOT EXISTS badge_color text NOT NULL DEFAULT '#16a34a';
+                ALTER TABLE app_plans ADD COLUMN IF NOT EXISTS badge_text_color text NOT NULL DEFAULT '#ffffff';
+                ALTER TABLE app_plans ADD COLUMN IF NOT EXISTS dictionary_daily_limit integer NOT NULL DEFAULT 30;
+                ALTER TABLE app_plans ADD COLUMN IF NOT EXISTS dictionary_monthly_limit integer NOT NULL DEFAULT 600;
+                ALTER TABLE app_plans ADD COLUMN IF NOT EXISTS correction_daily_limit integer NOT NULL DEFAULT 15;
+                ALTER TABLE app_plans ADD COLUMN IF NOT EXISTS correction_monthly_limit integer NOT NULL DEFAULT 300;
+
                 CREATE TABLE IF NOT EXISTS app_ai_usage (
                     user_id text NOT NULL,
                     usage_date date NOT NULL,
                     count integer NOT NULL DEFAULT 0,
                     PRIMARY KEY (user_id, usage_date)
+                );
+
+                CREATE TABLE IF NOT EXISTS app_ai_tool_usage (
+                    user_id text NOT NULL,
+                    tool text NOT NULL DEFAULT 'card',
+                    usage_date date NOT NULL,
+                    count integer NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, tool, usage_date)
                 );
 
                 CREATE TABLE IF NOT EXISTS app_settings (
@@ -386,7 +407,11 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         await using var connection = await DataSource.OpenConnectionAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, name, features::text, ai_daily_limit, ai_monthly_limit, card_limit, sort_order, is_default, created_at
+            SELECT id, name, badge_color, badge_text_color, features::text,
+                   ai_daily_limit, ai_monthly_limit,
+                   dictionary_daily_limit, dictionary_monthly_limit,
+                   correction_daily_limit, correction_monthly_limit,
+                   card_limit, sort_order, is_default, created_at
             FROM app_plans
             ORDER BY sort_order, name;
             """;
@@ -422,13 +447,29 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            INSERT INTO app_plans (id, name, features, ai_daily_limit, ai_monthly_limit, card_limit, sort_order, is_default, created_at)
-            VALUES (@id, @name, @features, @ai_daily_limit, @ai_monthly_limit, @card_limit, @sort_order, @is_default, @created_at)
+            INSERT INTO app_plans
+                (id, name, badge_color, badge_text_color, features,
+                 ai_daily_limit, ai_monthly_limit,
+                 dictionary_daily_limit, dictionary_monthly_limit,
+                 correction_daily_limit, correction_monthly_limit,
+                 card_limit, sort_order, is_default, created_at)
+            VALUES
+                (@id, @name, @badge_color, @badge_text_color, @features,
+                 @ai_daily_limit, @ai_monthly_limit,
+                 @dictionary_daily_limit, @dictionary_monthly_limit,
+                 @correction_daily_limit, @correction_monthly_limit,
+                 @card_limit, @sort_order, @is_default, @created_at)
             ON CONFLICT (id) DO UPDATE SET
                 name = EXCLUDED.name,
+                badge_color = EXCLUDED.badge_color,
+                badge_text_color = EXCLUDED.badge_text_color,
                 features = EXCLUDED.features,
                 ai_daily_limit = EXCLUDED.ai_daily_limit,
                 ai_monthly_limit = EXCLUDED.ai_monthly_limit,
+                dictionary_daily_limit = EXCLUDED.dictionary_daily_limit,
+                dictionary_monthly_limit = EXCLUDED.dictionary_monthly_limit,
+                correction_daily_limit = EXCLUDED.correction_daily_limit,
+                correction_monthly_limit = EXCLUDED.correction_monthly_limit,
                 card_limit = EXCLUDED.card_limit,
                 sort_order = EXCLUDED.sort_order,
                 is_default = EXCLUDED.is_default;
@@ -459,10 +500,11 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
             ?? PlanDefinition.Defaults()[0];
     }
 
-    public async Task<AiUsageSummary> GetAiUsageAsync(string userId, string planName)
+    public async Task<AiUsageSummary> GetAiUsageAsync(string userId, string planName, AiToolKind tool)
     {
         await EnsureReadyAsync();
         var plan = await GetEffectivePlanAsync(planName);
+        var toolKey = ToolKey(tool);
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var monthStart = new DateOnly(today.Year, today.Month, 1);
 
@@ -472,18 +514,20 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
             SELECT
                 COALESCE(SUM(CASE WHEN usage_date = @today THEN count ELSE 0 END), 0)::int AS today_count,
                 COALESCE(SUM(CASE WHEN usage_date >= @month_start THEN count ELSE 0 END), 0)::int AS month_count
-            FROM app_ai_usage
-            WHERE user_id = @user_id;
+            FROM app_ai_tool_usage
+            WHERE user_id = @user_id AND tool = @tool;
             """;
         command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("tool", toolKey);
         command.Parameters.AddWithValue("today", today);
         command.Parameters.AddWithValue("month_start", monthStart);
 
         await using var reader = await command.ExecuteReaderAsync();
         var summary = new AiUsageSummary
         {
-            DailyLimit = plan.AiDailyLimit,
-            MonthlyLimit = plan.AiMonthlyLimit
+            Tool = toolKey,
+            DailyLimit = DailyLimitFor(plan, tool),
+            MonthlyLimit = MonthlyLimitFor(plan, tool)
         };
         if (await reader.ReadAsync())
         {
@@ -495,20 +539,22 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         return summary;
     }
 
-    public async Task<AiUsageSummary> TryConsumeAiRequestAsync(string userId, string planName)
+    public async Task<AiUsageSummary> TryConsumeAiRequestAsync(string userId, string planName, AiToolKind tool)
     {
-        var summary = await GetAiUsageAsync(userId, planName);
+        var summary = await GetAiUsageAsync(userId, planName, tool);
         if (!summary.Allowed) return summary;
 
+        var toolKey = ToolKey(tool);
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         await using var connection = await DataSource.OpenConnectionAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO app_ai_usage (user_id, usage_date, count)
-            VALUES (@user_id, @usage_date, 1)
-            ON CONFLICT (user_id, usage_date) DO UPDATE SET count = app_ai_usage.count + 1;
+            INSERT INTO app_ai_tool_usage (user_id, tool, usage_date, count)
+            VALUES (@user_id, @tool, @usage_date, 1)
+            ON CONFLICT (user_id, tool, usage_date) DO UPDATE SET count = app_ai_tool_usage.count + 1;
             """;
         command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("tool", toolKey);
         command.Parameters.AddWithValue("usage_date", today);
         await command.ExecuteNonQueryAsync();
 
@@ -769,13 +815,19 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
     {
         Id = reader.GetString(0),
         Name = reader.GetString(1),
-        Features = DeserializeFeatures(reader.GetString(2)),
-        AiDailyLimit = reader.GetInt32(3),
-        AiMonthlyLimit = reader.GetInt32(4),
-        CardLimit = reader.GetInt32(5),
-        SortOrder = reader.GetInt32(6),
-        IsDefault = reader.GetBoolean(7),
-        CreatedAt = reader.GetFieldValue<DateTimeOffset>(8)
+        BadgeColor = reader.GetString(2),
+        BadgeTextColor = reader.GetString(3),
+        Features = DeserializeFeatures(reader.GetString(4)),
+        AiDailyLimit = reader.GetInt32(5),
+        AiMonthlyLimit = reader.GetInt32(6),
+        DictionaryDailyLimit = reader.GetInt32(7),
+        DictionaryMonthlyLimit = reader.GetInt32(8),
+        CorrectionDailyLimit = reader.GetInt32(9),
+        CorrectionMonthlyLimit = reader.GetInt32(10),
+        CardLimit = reader.GetInt32(11),
+        SortOrder = reader.GetInt32(12),
+        IsDefault = reader.GetBoolean(13),
+        CreatedAt = reader.GetFieldValue<DateTimeOffset>(14)
     };
 
     private static void AddCardParameters(NpgsqlCommand command, string userId, FlashCard card)
@@ -811,9 +863,15 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
     {
         command.Parameters.AddWithValue("id", plan.Id);
         command.Parameters.AddWithValue("name", plan.Name);
+        command.Parameters.AddWithValue("badge_color", string.IsNullOrWhiteSpace(plan.BadgeColor) ? "#16a34a" : plan.BadgeColor);
+        command.Parameters.AddWithValue("badge_text_color", string.IsNullOrWhiteSpace(plan.BadgeTextColor) ? "#ffffff" : plan.BadgeTextColor);
         command.Parameters.Add("features", NpgsqlDbType.Jsonb).Value = JsonSerializer.Serialize(plan.Features, JsonOptions);
         command.Parameters.AddWithValue("ai_daily_limit", plan.AiDailyLimit);
         command.Parameters.AddWithValue("ai_monthly_limit", plan.AiMonthlyLimit);
+        command.Parameters.AddWithValue("dictionary_daily_limit", plan.DictionaryDailyLimit);
+        command.Parameters.AddWithValue("dictionary_monthly_limit", plan.DictionaryMonthlyLimit);
+        command.Parameters.AddWithValue("correction_daily_limit", plan.CorrectionDailyLimit);
+        command.Parameters.AddWithValue("correction_monthly_limit", plan.CorrectionMonthlyLimit);
         command.Parameters.AddWithValue("card_limit", plan.CardLimit);
         command.Parameters.AddWithValue("sort_order", plan.SortOrder);
         command.Parameters.AddWithValue("is_default", plan.IsDefault);
@@ -826,8 +884,18 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         {
             await using var command = connection.CreateCommand();
             command.CommandText = """
-                INSERT INTO app_plans (id, name, features, ai_daily_limit, ai_monthly_limit, card_limit, sort_order, is_default, created_at)
-                VALUES (@id, @name, @features, @ai_daily_limit, @ai_monthly_limit, @card_limit, @sort_order, @is_default, @created_at)
+                INSERT INTO app_plans
+                    (id, name, badge_color, badge_text_color, features,
+                     ai_daily_limit, ai_monthly_limit,
+                     dictionary_daily_limit, dictionary_monthly_limit,
+                     correction_daily_limit, correction_monthly_limit,
+                     card_limit, sort_order, is_default, created_at)
+                VALUES
+                    (@id, @name, @badge_color, @badge_text_color, @features,
+                     @ai_daily_limit, @ai_monthly_limit,
+                     @dictionary_daily_limit, @dictionary_monthly_limit,
+                     @correction_daily_limit, @correction_monthly_limit,
+                     @card_limit, @sort_order, @is_default, @created_at)
                 ON CONFLICT (id) DO NOTHING;
                 """;
             AddPlanParameters(command, plan);
@@ -856,9 +924,30 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         summary.Message = summary.Allowed
             ? string.Empty
             : dailyExceeded
-                ? "سقف روزانه درخواست‌های AI این پلن تمام شده است."
-                : "سقف ماهانه درخواست‌های AI این پلن تمام شده است.";
+                ? "سقف روزانه این ابزار در پلن شما تمام شده است."
+                : "سقف ماهانه این ابزار در پلن شما تمام شده است.";
     }
+
+    private static string ToolKey(AiToolKind tool) => tool switch
+    {
+        AiToolKind.Dictionary => "dictionary",
+        AiToolKind.Correction => "correction",
+        _ => "card"
+    };
+
+    private static int DailyLimitFor(PlanDefinition plan, AiToolKind tool) => tool switch
+    {
+        AiToolKind.Dictionary => plan.DictionaryDailyLimit,
+        AiToolKind.Correction => plan.CorrectionDailyLimit,
+        _ => plan.AiDailyLimit
+    };
+
+    private static int MonthlyLimitFor(PlanDefinition plan, AiToolKind tool) => tool switch
+    {
+        AiToolKind.Dictionary => plan.DictionaryMonthlyLimit,
+        AiToolKind.Correction => plan.CorrectionMonthlyLimit,
+        _ => plan.AiMonthlyLimit
+    };
 
     private static string GenerateCode()
     {

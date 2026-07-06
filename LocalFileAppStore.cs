@@ -249,25 +249,27 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
             ?? PlanDefinition.Defaults()[0];
     }
 
-    public async Task<AiUsageSummary> GetAiUsageAsync(string userId, string planName)
+    public async Task<AiUsageSummary> GetAiUsageAsync(string userId, string planName, AiToolKind tool)
     {
         var plan = await GetEffectivePlanAsync(planName);
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var monthStart = new DateOnly(today.Year, today.Month, 1);
         var db = await LoadAsync();
-        var usage = db.AiUsage.Where(item => item.UserId == userId).ToList();
+        var toolKey = ToolKey(tool);
+        var usage = db.AiUsage.Where(item => item.UserId == userId && item.Tool == toolKey).ToList();
         var summary = new AiUsageSummary
         {
+            Tool = toolKey,
             Today = usage.Where(item => item.UsageDate == today).Sum(item => item.Count),
             ThisMonth = usage.Where(item => item.UsageDate >= monthStart).Sum(item => item.Count),
-            DailyLimit = plan.AiDailyLimit,
-            MonthlyLimit = plan.AiMonthlyLimit
+            DailyLimit = DailyLimitFor(plan, tool),
+            MonthlyLimit = MonthlyLimitFor(plan, tool)
         };
         ApplyAiAllowance(summary);
         return summary;
     }
 
-    public async Task<AiUsageSummary> TryConsumeAiRequestAsync(string userId, string planName)
+    public async Task<AiUsageSummary> TryConsumeAiRequestAsync(string userId, string planName, AiToolKind tool)
     {
         return await MutateAsync(db =>
         {
@@ -275,21 +277,23 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
             var plan = EffectivePlan(db, planName);
             var today = DateOnly.FromDateTime(DateTime.UtcNow);
             var monthStart = new DateOnly(today.Year, today.Month, 1);
-            var userUsage = db.AiUsage.Where(item => item.UserId == userId).ToList();
+            var toolKey = ToolKey(tool);
+            var userUsage = db.AiUsage.Where(item => item.UserId == userId && item.Tool == toolKey).ToList();
             var summary = new AiUsageSummary
             {
+                Tool = toolKey,
                 Today = userUsage.Where(item => item.UsageDate == today).Sum(item => item.Count),
                 ThisMonth = userUsage.Where(item => item.UsageDate >= monthStart).Sum(item => item.Count),
-                DailyLimit = plan.AiDailyLimit,
-                MonthlyLimit = plan.AiMonthlyLimit
+                DailyLimit = DailyLimitFor(plan, tool),
+                MonthlyLimit = MonthlyLimitFor(plan, tool)
             };
             ApplyAiAllowance(summary);
             if (!summary.Allowed) return summary;
 
-            var item = db.AiUsage.FirstOrDefault(row => row.UserId == userId && row.UsageDate == today);
+            var item = db.AiUsage.FirstOrDefault(row => row.UserId == userId && row.Tool == toolKey && row.UsageDate == today);
             if (item is null)
             {
-                item = new LocalAiUsage { UserId = userId, UsageDate = today, Count = 0 };
+                item = new LocalAiUsage { UserId = userId, Tool = toolKey, UsageDate = today, Count = 0 };
                 db.AiUsage.Add(item);
             }
 
@@ -422,9 +426,30 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         summary.Message = summary.Allowed
             ? string.Empty
             : dailyExceeded
-                ? "سقف روزانه درخواست‌های AI این پلن تمام شده است."
-                : "سقف ماهانه درخواست‌های AI این پلن تمام شده است.";
+                ? "سقف روزانه این ابزار در پلن شما تمام شده است."
+                : "سقف ماهانه این ابزار در پلن شما تمام شده است.";
     }
+
+    private static string ToolKey(AiToolKind tool) => tool switch
+    {
+        AiToolKind.Dictionary => "dictionary",
+        AiToolKind.Correction => "correction",
+        _ => "card"
+    };
+
+    private static int DailyLimitFor(PlanDefinition plan, AiToolKind tool) => tool switch
+    {
+        AiToolKind.Dictionary => plan.DictionaryDailyLimit,
+        AiToolKind.Correction => plan.CorrectionDailyLimit,
+        _ => plan.AiDailyLimit
+    };
+
+    private static int MonthlyLimitFor(PlanDefinition plan, AiToolKind tool) => tool switch
+    {
+        AiToolKind.Dictionary => plan.DictionaryMonthlyLimit,
+        AiToolKind.Correction => plan.CorrectionMonthlyLimit,
+        _ => plan.AiMonthlyLimit
+    };
 
     private sealed class LocalAppDatabase
     {
@@ -439,6 +464,7 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
     private sealed class LocalAiUsage
     {
         public string UserId { get; set; } = string.Empty;
+        public string Tool { get; set; } = "card";
         public DateOnly UsageDate { get; set; }
         public int Count { get; set; }
     }

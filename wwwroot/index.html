@@ -15,13 +15,27 @@
     <header class="app-header">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true">L</div>
-        <div>
+        <div class="brand-copy">
           <p id="profileText">LinguaLite</p>
-          <h1>لایتنر زبان</h1>
+          <h1>تمرین زبان</h1>
         </div>
       </div>
-      <button class="icon-button" id="refreshButton" type="button" aria-label="تازه‌سازی">↻</button>
+      <div class="header-actions">
+        <span class="plan-badge" id="planBadge">Free</span>
+        <button class="icon-button" id="refreshButton" type="button" aria-label="تازه‌سازی">↻</button>
+      </div>
     </header>
+
+    <section class="account-strip">
+      <div>
+        <small>وضعیت</small>
+        <strong id="accountStatusText">در حال بارگذاری</strong>
+      </div>
+      <div>
+        <small>مدل</small>
+        <strong class="mixed" id="modelText">-</strong>
+      </div>
+    </section>
 
     <section class="stats-grid" aria-label="آمار">
       <article class="stat strong">
@@ -34,7 +48,7 @@
       </article>
       <article class="stat">
         <small>دقت</small>
-        <span id="accuracy">۰%</span>
+        <span id="accuracy">۰٪</span>
       </article>
     </section>
 
@@ -42,7 +56,9 @@
       <button class="tab active" data-view="review" type="button">مرور</button>
       <button class="tab" data-view="add" type="button">افزودن</button>
       <button class="tab" data-view="deck" type="button">کارت‌ها</button>
-      <button class="tab" data-view="tools" type="button">ابزار</button>
+      <button class="tab" data-view="dictionary" type="button">دیکشنری</button>
+      <button class="tab" data-view="correction" type="button">اصلاح</button>
+      <button class="tab" data-view="settings" type="button">اکانت</button>
     </nav>
 
     <section class="view active" id="reviewView">
@@ -56,14 +72,14 @@
         </div>
         <div class="flash-face">
           <small id="frontCaption">روی کارت</small>
-          <div class="prompt" id="frontText">در حال آماده‌سازی...</div>
-          <p class="example" id="exampleText"></p>
+          <div class="prompt mixed" id="frontText">در حال آماده‌سازی...</div>
+          <p class="example mixed" id="exampleText"></p>
         </div>
-        <button class="primary-button" id="revealButton" type="button">نمایش جواب</button>
+        <button class="primary-button" id="revealButton" type="button">نمایش پشت کارت</button>
         <div class="answer-panel" id="answerPanel" hidden>
           <small id="backCaption">پشت کارت</small>
-          <p id="backText"></p>
-          <p id="qaText"></p>
+          <p class="mixed" id="backText"></p>
+          <p class="mixed" id="qaText"></p>
           <div class="review-actions">
             <button class="secondary-button danger" id="forgotButton" type="button">یادم نبود</button>
             <button class="secondary-button success" id="rememberedButton" type="button">بلد بودم</button>
@@ -79,19 +95,19 @@
     <section class="view" id="addView">
       <article class="panel ai-panel" id="aiPanel">
         <div class="panel-title">
-          <strong id="aiPanelTitle">تکمیل خودکار با OpenRouter</strong>
-          <span id="modelText">مدل از تنظیمات سرور خوانده می‌شود.</span>
+          <strong id="aiPanelTitle">تکمیل کارت با OpenRouter</strong>
+          <span id="aiPanelHint">کلمه، جمله یا فیدبک را بده تا AI فیلدهای کارت را کامل کند.</span>
         </div>
         <div class="ai-row">
-          <input id="aiWordInput" autocomplete="off" placeholder="لغت، عبارت یا جمله را بنویس">
+          <input class="mixed-input" id="aiWordInput" autocomplete="off" placeholder="ancestor">
           <button class="primary-button compact" id="completeAiButton" type="button">پر کن</button>
         </div>
-        <p class="mode-hint" id="aiPanelHint">AI معنی، مثال، سوال تمرینی و جواب را برای کارت آماده می‌کند.</p>
+        <p class="quota-line" id="cardQuotaText">-</p>
       </article>
 
       <form class="panel card-form" id="cardForm">
         <div class="panel-title">
-          <strong>کارت جدید</strong>
+          <strong id="formTitle">کارت جدید</strong>
           <span id="typeHelper">نوع کارت را انتخاب کن؛ فرم و دستور AI بر همان اساس تنظیم می‌شود.</span>
         </div>
 
@@ -102,37 +118,40 @@
           <label class="feedback-choice"><input type="radio" name="type" value="Feedback"><span>فیدبک</span></label>
         </div>
 
-        <section class="feedback-guide" id="feedbackGuide" aria-live="polite">
-          <strong>کارت فیدبک برای اصلاح اشتباه است</strong>
-          <span>اشتباه خودت یا حرف استاد را بنویس؛ AI کارت را با «اشتباه، اصلاح، دلیل، تمرین و جواب» می‌سازد.</span>
-          <code>wrong: I programmer → correct: I am a programmer</code>
+        <section class="feedback-guide" id="feedbackGuide" aria-live="polite" hidden>
+          <strong>فیدبک یعنی تبدیل اشتباه واقعی به کارت تمرین</strong>
+          <span>فقط مشکل را بنویس؛ لازم نیست روی کارت را خودت طراحی کنی. سیستم اصلاح را از روی متن می‌فهمد و پشت کارت را آموزشی می‌چیند.</span>
+          <code class="mixed">wrong: I programmer → correct: I am a programmer</code>
         </section>
 
         <label>
           <span id="frontLabel">روی کارت</span>
-          <input id="frontInput" name="front" autocomplete="off" placeholder="resilient" required>
+          <input class="mixed-input" id="frontInput" name="front" autocomplete="off" placeholder="resilient" required>
         </label>
         <label>
           <span id="backLabel">پشت کارت / توضیح</span>
-          <textarea id="backInput" name="back" rows="3" placeholder="معنی یا توضیح فارسی" required></textarea>
+          <textarea class="mixed-input" id="backInput" name="back" rows="3" placeholder="معنی یا توضیح فارسی" required></textarea>
         </label>
         <label>
           <span id="exampleLabel">مثال</span>
-          <textarea id="exampleInput" name="example" rows="2" placeholder="She stayed resilient."></textarea>
+          <textarea class="mixed-input" id="exampleInput" name="example" rows="2" placeholder="She stayed resilient."></textarea>
         </label>
         <label>
-          <span id="promptLabel">سوال تمرینی</span>
-          <input id="promptInput" name="prompt" autocomplete="off" placeholder="What does resilient mean?">
+          <span id="promptLabel">سؤال تمرینی</span>
+          <input class="mixed-input" id="promptInput" name="prompt" autocomplete="off" placeholder="What does resilient mean?">
         </label>
         <label>
           <span id="answerLabel">جواب پیشنهادی</span>
-          <input id="answerInput" name="answer" autocomplete="off" placeholder="تاب‌آور">
+          <input class="mixed-input" id="answerInput" name="answer" autocomplete="off" placeholder="تاب‌آور">
         </label>
         <label>
           <span id="notesLabel">یادداشت</span>
-          <input id="notesInput" name="notes" autocomplete="off" placeholder="کاربرد، خطای رایج، الگو">
+          <input class="mixed-input" id="notesInput" name="notes" autocomplete="off" placeholder="کاربرد، خطای رایج، الگو">
         </label>
-        <button class="primary-button" type="submit">افزودن به لایتنر</button>
+        <div class="form-actions">
+          <button class="primary-button" id="saveCardButton" type="submit">افزودن به لایتنر</button>
+          <button class="secondary-button" id="cancelEditButton" type="button" hidden>لغو ویرایش</button>
+        </div>
       </form>
     </section>
 
@@ -141,14 +160,42 @@
       <div class="deck-list" id="deckList"></div>
     </section>
 
-    <section class="view" id="toolsView">
+    <section class="view" id="dictionaryView">
+      <article class="panel tool-panel">
+        <div class="panel-title">
+          <strong>دیکشنری هوشمند</strong>
+          <span>معنی فارسی، تعریف ساده، مترادف، مثال و نکته کاربردی می‌دهد.</span>
+        </div>
+        <div class="ai-row">
+          <input class="mixed-input" id="dictionaryInput" autocomplete="off" placeholder="ancestor">
+          <button class="primary-button compact" id="dictionaryButton" type="button">جستجو</button>
+        </div>
+        <p class="quota-line" id="dictionaryQuotaText">-</p>
+        <div class="tool-result" id="dictionaryResult" hidden></div>
+      </article>
+    </section>
+
+    <section class="view" id="correctionView">
+      <article class="panel tool-panel">
+        <div class="panel-title">
+          <strong>اصلاح و تحلیل جمله</strong>
+          <span>اشتباه‌ها را جدا جدا نشان می‌دهد، نسخه درست می‌سازد و توضیح فارسی می‌دهد.</span>
+        </div>
+        <textarea class="mixed-input" id="correctionInput" rows="4" placeholder="I programmer"></textarea>
+        <button class="primary-button" id="correctionButton" type="button">تحلیل کن</button>
+        <p class="quota-line" id="correctionQuotaText">-</p>
+        <div class="tool-result" id="correctionResult" hidden></div>
+      </article>
+    </section>
+
+    <section class="view" id="settingsView">
       <article class="panel user-info-panel" id="userInfoPanel">
         <div class="panel-title">
           <strong>اطلاعات اکانت</strong>
-          <span>این همان شناسه‌ای است که کارت‌ها و پیشرفت مرور با آن ذخیره می‌شود.</span>
+          <span>در تلگرام، اطلاعات با شناسه تلگرام ذخیره می‌شود و روی گوشی و کامپیوتر همان کارت‌ها را می‌بینی.</span>
         </div>
         <div class="profile-grid">
-          <div><small>کاربر</small><strong id="userIdText">-</strong></div>
+          <div><small>کاربر</small><strong class="mixed" id="userIdText">-</strong></div>
           <div><small>پلن</small><strong id="userPlanText">-</strong></div>
           <div><small>ذخیره‌سازی</small><strong id="storageProviderText">-</strong></div>
           <div><small>دسترسی‌ها</small><strong id="userFeaturesText">-</strong></div>
@@ -157,19 +204,21 @@
 
       <form class="panel settings-form" id="settingsForm">
         <div class="panel-title">
-          <strong>تنظیمات کاربر</strong>
-          <span>اگر کلید روی سرور تنظیم نشده باشد، می‌توانی کلید OpenRouter خودت را اینجا بگذاری.</span>
+          <strong>کلید و کد فعال‌سازی</strong>
+          <span>اگر کلید روی سرور نیست، کلید OpenRouter خودت را فقط در همین دستگاه ذخیره کن. کد فعال‌سازی پلن را هم همینجا وارد کن.</span>
         </div>
         <label>
           <span>OpenRouter API Key</span>
-          <input id="apiKeyInput" type="password" autocomplete="off" placeholder="sk-or-v1-...">
+          <input class="mixed-input" id="apiKeyInput" type="password" autocomplete="off" placeholder="sk-or-v1-...">
         </label>
         <label>
           <span>کد فعال‌سازی</span>
-          <input id="redeemCodeInput" autocomplete="off" placeholder="LL-...">
+          <input class="mixed-input" id="redeemCodeInput" autocomplete="off" placeholder="LL-...">
         </label>
-        <button class="primary-button" type="submit">ذخیره تنظیمات</button>
-        <button class="secondary-button" id="redeemCodeButton" type="button">فعال‌سازی کد</button>
+        <div class="tool-row">
+          <button class="primary-button" type="submit">ذخیره کلید</button>
+          <button class="secondary-button" id="redeemCodeButton" type="button">فعال‌سازی کد</button>
+        </div>
       </form>
 
       <article class="panel">
@@ -186,7 +235,6 @@
         </div>
       </article>
     </section>
-
   </main>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>

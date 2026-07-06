@@ -23,7 +23,7 @@
     <form class="panel admin-login" id="adminLoginForm">
       <div class="panel-title">
         <strong>ورود ادمین</strong>
-        <span>این صفحه از مینی‌اپ جداست و فقط با `ADMIN_TOKEN` سرور کار می‌کند.</span>
+        <span>این صفحه از مینی‌اپ جداست و فقط با ADMIN_TOKEN سرور باز می‌شود.</span>
       </div>
       <div class="admin-row">
         <input id="adminTokenInput" type="password" autocomplete="off" placeholder="ADMIN_TOKEN">
@@ -43,7 +43,7 @@
       <section class="panel">
         <div class="panel-title">
           <strong>تنظیمات اپ و ربات</strong>
-          <span>مدل OpenRouter، آدرس عمومی، لینک Mini App و یادآوری‌های ربات از اینجا کنترل می‌شود.</span>
+          <span>مدل OpenRouter، آدرس عمومی، لینک Mini App، وبهوک و یادآوری‌های ربات از اینجا کنترل می‌شود.</span>
         </div>
         <form class="settings-grid" id="settingsForm">
           <label><span>OpenRouter Model</span><input id="openRouterModelInput" placeholder="google/gemma-4-31b-it:free"></label>
@@ -61,11 +61,11 @@
 
       <section class="panel">
         <div class="panel-title">
-          <strong>پلن‌ها و محدودیت AI</strong>
-          <span>کارت‌ها را بکش و جابه‌جا کن؛ هر پلن سقف AI و کارت خودش را دارد. مقدار `-1` یعنی نامحدود.</span>
+          <strong>پلن‌ها و دسترسی‌ها</strong>
+          <span>رنگ بج، دسترسی ابزارها و سقف روزانه/ماهانه هر بخش را جدا تعیین کن. مقدار -1 یعنی نامحدود.</span>
         </div>
         <div class="plan-actions">
-          <input id="newPlanNameInput" placeholder="نام پلن جدید مثلا Starter">
+          <input id="newPlanNameInput" placeholder="نام پلن جدید مثل Plus">
           <button class="secondary-button" id="addPlanButton" type="button">افزودن پلن</button>
         </div>
         <div class="plans-board" id="plansBoard"></div>
@@ -74,7 +74,7 @@
       <section class="panel">
         <div class="panel-title">
           <strong>کاربران</strong>
-          <span>شناسه تلگرام، username، پلن، یادآوری و وضعیت هر کاربر اینجا مدیریت می‌شود.</span>
+          <span>شناسه تلگرام، username، پلن، یادآوری و وضعیت هر کاربر اینجا دیده و مدیریت می‌شود.</span>
         </div>
         <div class="admin-list" id="usersList"></div>
       </section>
@@ -82,7 +82,7 @@
       <section class="panel">
         <div class="panel-title">
           <strong>کدهای دسترسی</strong>
-          <span>کد بساز تا کاربر با وارد کردن آن پلن و دسترسی‌ها را بگیرد.</span>
+          <span>کد بساز تا کاربر با وارد کردن آن پلن و دسترسی‌های همان پلن را بگیرد.</span>
         </div>
         <div class="admin-grid">
           <select id="codePlanInput"></select>

@@ -77,7 +77,10 @@ api.MapGet("/config", async (HttpContext http, IConfiguration config, IAppStore 
     var profile = await store.GetOrCreateUserAsync(user);
     var settings = await store.GetSettingsAsync();
     var openRouter = await OpenRouterOptions.FromAsync(config, store);
-    var usage = await store.GetAiUsageAsync(profile.Id, profile.Plan);
+    var plan = await store.GetEffectivePlanAsync(profile.Plan);
+    var cardUsage = await store.GetAiUsageAsync(profile.Id, profile.Plan, AiToolKind.Card);
+    var dictionaryUsage = await store.GetAiUsageAsync(profile.Id, profile.Plan, AiToolKind.Dictionary);
+    var correctionUsage = await store.GetAiUsageAsync(profile.Id, profile.Plan, AiToolKind.Correction);
     return Results.Ok(new
     {
         userId = profile.Id,
@@ -86,9 +89,16 @@ api.MapGet("/config", async (HttpContext http, IConfiguration config, IAppStore 
         profile.TelegramId,
         profile.TelegramUsername,
         profile.Plan,
+        effectivePlan = plan,
         profile.IsActive,
         profile.Features,
-        aiUsage = usage,
+        aiUsage = cardUsage,
+        usage = new
+        {
+            card = cardUsage,
+            dictionary = dictionaryUsage,
+            correction = correctionUsage
+        },
         storageProvider = store.ProviderName,
         adminEnabled = !string.IsNullOrWhiteSpace(config["ADMIN_TOKEN"]),
         openRouterModel = openRouter.DefaultModel,
@@ -144,7 +154,7 @@ api.MapPost("/cards", async (HttpContext http, IConfiguration config, CreateCard
     }
 
     var plan = await store.GetEffectivePlanAsync(profile.Plan);
-    if (plan.CardLimit > -1 && (await store.GetDeckAsync(profile.Id)).Cards.Count >= plan.CardLimit)
+    if (!profile.Features.UnlimitedCards && plan.CardLimit > -1 && (await store.GetDeckAsync(profile.Id)).Cards.Count >= plan.CardLimit)
     {
         return Results.BadRequest(new { message = "سقف تعداد کارت‌های این پلن پر شده است." });
     }
@@ -166,6 +176,45 @@ api.MapPost("/cards", async (HttpContext http, IConfiguration config, CreateCard
 
     await store.AddCardAsync(profile.Id, card);
     return Results.Created($"/api/cards/{card.Id}", FeedbackCardPresenter.ToReviewShape(card));
+});
+
+api.MapPut("/cards/{id:guid}", async (HttpContext http, IConfiguration config, Guid id, UpdateCardRequest updateRequest, IAppStore store) =>
+{
+    var profile = await RequireUserAsync(http, config, store);
+    if (profile is null) return Results.Unauthorized();
+    if (updateRequest.Type == CardType.Feedback && !profile.Features.FeedbackCards)
+    {
+        return Results.Json(new { message = "این نوع کارت در پلن شما فعال نیست." }, statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    var normalized = NormalizeFeedbackRequest(new CreateCardRequest(
+        updateRequest.Front,
+        updateRequest.Back,
+        updateRequest.Example,
+        updateRequest.Prompt,
+        updateRequest.Answer,
+        updateRequest.Notes,
+        updateRequest.Type));
+
+    if (string.IsNullOrWhiteSpace(normalized.Front) || string.IsNullOrWhiteSpace(normalized.Back))
+    {
+        return Results.BadRequest(new { message = "روی کارت و پشت کارت را کامل وارد کنید." });
+    }
+
+    var card = await store.UpdateCardAsync(profile.Id, id, item =>
+    {
+        item.Front = normalized.Front.Trim();
+        item.Back = normalized.Back.Trim();
+        item.Example = normalized.Example?.Trim() ?? string.Empty;
+        item.Prompt = normalized.Prompt?.Trim() ?? string.Empty;
+        item.Answer = normalized.Answer?.Trim() ?? string.Empty;
+        item.Notes = normalized.Notes?.Trim() ?? string.Empty;
+        item.Type = normalized.Type;
+    });
+
+    return card is null
+        ? Results.NotFound(new { message = "کارت پیدا نشد." })
+        : Results.Ok(FeedbackCardPresenter.ToReviewShape(card));
 });
 
 api.MapPost("/cards/{id:guid}/review", async (
@@ -219,7 +268,8 @@ api.MapGet("/export", async (HttpContext http, IConfiguration config, IAppStore 
     if (!profile.Features.ExportImport) return Results.Forbid();
 
     var deck = await store.GetDeckAsync(profile.Id);
-    return Results.Json(new ExportPayload(profile.Id, DateTimeOffset.UtcNow, deck.Cards), AppJsonOptions.CreateIndented());
+    var json = JsonSerializer.Serialize(new ExportPayload(profile.Id, DateTimeOffset.UtcNow, deck.Cards), AppJsonOptions.CreateIndented());
+    return Results.Text(json, "application/json; charset=utf-8", Encoding.UTF8);
 });
 
 api.MapPost("/import", async (HttpContext http, IConfiguration config, ImportRequest request, IAppStore store) =>
@@ -269,7 +319,7 @@ api.MapPost("/ai/complete", async (AiCompleteRequest request, HttpContext http, 
         return Results.BadRequest(new { message = "OPENROUTER_API_KEY را روی سرور بگذارید یا کلید را در تنظیمات اپ وارد کنید." });
     }
 
-    var quota = await store.TryConsumeAiRequestAsync(profile.Id, profile.Plan);
+    var quota = await store.TryConsumeAiRequestAsync(profile.Id, profile.Plan, AiToolKind.Card);
     if (!quota.Allowed)
     {
         return Results.Json(new { message = quota.Message, usage = quota }, statusCode: StatusCodes.Status429TooManyRequests);
@@ -277,6 +327,64 @@ api.MapPost("/ai/complete", async (AiCompleteRequest request, HttpContext http, 
 
     var card = NormalizeFeedbackRequest(await ai.CompleteAsync(request, apiKey));
     return Results.Ok(card);
+});
+
+api.MapPost("/ai/dictionary", async (DictionaryRequest request, HttpContext http, IConfiguration config, IAppStore store, OpenRouterCardService ai) =>
+{
+    var profile = await RequireUserAsync(http, config, store);
+    if (profile is null) return Results.Unauthorized();
+    if (!profile.Features.Dictionary)
+    {
+        return Results.Json(new { message = "دیکشنری هوشمند در پلن شما فعال نیست." }, statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    if (string.IsNullOrWhiteSpace(request.Text))
+    {
+        return Results.BadRequest(new { message = "کلمه یا عبارت را وارد کنید." });
+    }
+
+    var apiKey = ResolveOpenRouterApiKey(http, config);
+    if (string.IsNullOrWhiteSpace(apiKey))
+    {
+        return Results.BadRequest(new { message = "کلید OpenRouter روی سرور یا تنظیمات اپ پیدا نشد." });
+    }
+
+    var quota = await store.TryConsumeAiRequestAsync(profile.Id, profile.Plan, AiToolKind.Dictionary);
+    if (!quota.Allowed)
+    {
+        return Results.Json(new { message = quota.Message, usage = quota }, statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
+    return Results.Ok(await ai.LookupDictionaryAsync(request, apiKey));
+});
+
+api.MapPost("/ai/correction", async (CorrectionRequest request, HttpContext http, IConfiguration config, IAppStore store, OpenRouterCardService ai) =>
+{
+    var profile = await RequireUserAsync(http, config, store);
+    if (profile is null) return Results.Unauthorized();
+    if (!profile.Features.TextCorrection)
+    {
+        return Results.Json(new { message = "اصلاح متن در پلن شما فعال نیست." }, statusCode: StatusCodes.Status403Forbidden);
+    }
+
+    if (string.IsNullOrWhiteSpace(request.Text))
+    {
+        return Results.BadRequest(new { message = "متن یا جمله را وارد کنید." });
+    }
+
+    var apiKey = ResolveOpenRouterApiKey(http, config);
+    if (string.IsNullOrWhiteSpace(apiKey))
+    {
+        return Results.BadRequest(new { message = "کلید OpenRouter روی سرور یا تنظیمات اپ پیدا نشد." });
+    }
+
+    var quota = await store.TryConsumeAiRequestAsync(profile.Id, profile.Plan, AiToolKind.Correction);
+    if (!quota.Allowed)
+    {
+        return Results.Json(new { message = quota.Message, usage = quota }, statusCode: StatusCodes.Status429TooManyRequests);
+    }
+
+    return Results.Ok(await ai.CorrectTextAsync(request, apiKey));
 });
 
 api.MapPost("/bot/webhook", async (JsonElement update, TelegramBotService bot) =>
@@ -336,9 +444,15 @@ admin.MapPut("/plans/{id}", async (HttpContext http, IConfiguration config, stri
     {
         Id = id,
         Name = request.Name,
+        BadgeColor = string.IsNullOrWhiteSpace(request.BadgeColor) ? "#16a34a" : request.BadgeColor,
+        BadgeTextColor = string.IsNullOrWhiteSpace(request.BadgeTextColor) ? "#ffffff" : request.BadgeTextColor,
         Features = request.Features,
         AiDailyLimit = request.AiDailyLimit,
         AiMonthlyLimit = request.AiMonthlyLimit,
+        DictionaryDailyLimit = request.DictionaryDailyLimit,
+        DictionaryMonthlyLimit = request.DictionaryMonthlyLimit,
+        CorrectionDailyLimit = request.CorrectionDailyLimit,
+        CorrectionMonthlyLimit = request.CorrectionMonthlyLimit,
         CardLimit = request.CardLimit,
         SortOrder = request.SortOrder,
         IsDefault = request.IsDefault,
@@ -412,6 +526,12 @@ static bool IsAdmin(HttpContext http, IConfiguration config)
     var actual = http.Request.Headers["X-Admin-Token"].FirstOrDefault();
     return !string.IsNullOrWhiteSpace(actual)
         && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(actual), Encoding.UTF8.GetBytes(expected));
+}
+
+static string? ResolveOpenRouterApiKey(HttpContext http, IConfiguration config)
+{
+    var apiKey = http.Request.Headers["X-OpenRouter-Api-Key"].FirstOrDefault();
+    return string.IsNullOrWhiteSpace(apiKey) ? config["OPENROUTER_API_KEY"] : apiKey;
 }
 
 static CreateCardRequest NormalizeFeedbackRequest(CreateCardRequest request)

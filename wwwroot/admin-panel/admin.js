@@ -93,26 +93,37 @@ function renderSettings(payload) {
 }
 
 function renderPlans() {
-  elements.codePlanInput.innerHTML = state.plans.map(plan => `<option value="${escapeHtml(plan.name)}">${escapeHtml(plan.name)}</option>`).join("");
+  elements.codePlanInput.innerHTML = state.plans
+    .map(plan => `<option value="${escapeHtml(plan.name)}">${escapeHtml(plan.name)}</option>`)
+    .join("");
+
   elements.plansBoard.innerHTML = state.plans.map(plan => `
     <article class="plan-card" draggable="true" data-plan-id="${escapeHtml(plan.id)}">
       <div class="plan-head">
-        <strong>${escapeHtml(plan.name)}</strong>
+        <span class="plan-preview" style="background:${safeColor(plan.badgeColor, "#16a34a")};color:${safeColor(plan.badgeTextColor, "#ffffff")}">${escapeHtml(plan.name)}</span>
         <span class="plan-grip">↕</span>
       </div>
       <div class="plan-fields">
         <label>نام<input data-field="name" value="${escapeHtml(plan.name)}"></label>
         <label>شناسه<input data-field="id" value="${escapeHtml(plan.id)}" ${plan.isDefault ? "disabled" : ""}></label>
-        <label>AI روزانه<input data-field="aiDailyLimit" type="number" value="${plan.aiDailyLimit}"></label>
-        <label>AI ماهانه<input data-field="aiMonthlyLimit" type="number" value="${plan.aiMonthlyLimit}"></label>
+        <label>رنگ بج<input data-field="badgeColor" type="color" value="${safeColor(plan.badgeColor, "#16a34a")}"></label>
+        <label>رنگ متن<input data-field="badgeTextColor" type="color" value="${safeColor(plan.badgeTextColor, "#ffffff")}"></label>
+        <label>AI کارت روزانه<input data-field="aiDailyLimit" type="number" value="${plan.aiDailyLimit}"></label>
+        <label>AI کارت ماهانه<input data-field="aiMonthlyLimit" type="number" value="${plan.aiMonthlyLimit}"></label>
+        <label>دیکشنری روزانه<input data-field="dictionaryDailyLimit" type="number" value="${plan.dictionaryDailyLimit}"></label>
+        <label>دیکشنری ماهانه<input data-field="dictionaryMonthlyLimit" type="number" value="${plan.dictionaryMonthlyLimit}"></label>
+        <label>اصلاح روزانه<input data-field="correctionDailyLimit" type="number" value="${plan.correctionDailyLimit}"></label>
+        <label>اصلاح ماهانه<input data-field="correctionMonthlyLimit" type="number" value="${plan.correctionMonthlyLimit}"></label>
         <label>سقف کارت<input data-field="cardLimit" type="number" value="${plan.cardLimit}"></label>
         <label>ترتیب<input data-field="sortOrder" type="number" value="${plan.sortOrder}"></label>
       </div>
       <div class="feature-line">
-        ${featureCheckbox("ai", "AI", plan.features.ai)}
-        ${featureCheckbox("feedbackCards", "Feedback", plan.features.feedbackCards)}
+        ${featureCheckbox("ai", "AI کارت", plan.features.ai)}
+        ${featureCheckbox("dictionary", "دیکشنری", plan.features.dictionary)}
+        ${featureCheckbox("textCorrection", "اصلاح متن", plan.features.textCorrection)}
+        ${featureCheckbox("feedbackCards", "فیدبک", plan.features.feedbackCards)}
         ${featureCheckbox("exportImport", "Import", plan.features.exportImport)}
-        ${featureCheckbox("unlimitedCards", "Unlimited", plan.features.unlimitedCards)}
+        ${featureCheckbox("unlimitedCards", "نامحدود", plan.features.unlimitedCards)}
       </div>
       <label class="check-row"><input data-field="isDefault" type="checkbox" ${plan.isDefault ? "checked" : ""}> <span>پیش‌فرض</span></label>
       <div class="tool-row">
@@ -136,20 +147,23 @@ function renderPlans() {
 }
 
 function renderUsers() {
-  elements.usersList.innerHTML = state.users.map(user => `
-    <article class="admin-item">
-      <div>
-        <strong>${escapeHtml(user.displayName || user.id)}</strong>
-        <small>${escapeHtml(user.id)} · tg:${escapeHtml(user.telegramId || "-")} · @${escapeHtml(user.telegramUsername || "-")}</small>
-        <small>${escapeHtml(user.source)} · ${escapeHtml(user.plan)} · ${user.isActive ? "فعال" : "غیرفعال"} · AI: ${escapeHtml(featureSummary(user.features))}</small>
-      </div>
-      <div class="user-controls">
-        <select data-user-field="plan">${state.plans.map(plan => `<option value="${escapeHtml(plan.name)}" ${plan.name === user.plan ? "selected" : ""}>${escapeHtml(plan.name)}</option>`).join("")}</select>
-        <button class="mini-button" type="button" data-action="toggle-active">${user.isActive ? "غیرفعال" : "فعال"}</button>
-        <button class="mini-button" type="button" data-action="toggle-reminder">${user.remindersEnabled ? "قطع یادآوری" : "فعال یادآوری"}</button>
-      </div>
-    </article>
-  `).join("");
+  elements.usersList.innerHTML = state.users.map(user => {
+    const plan = findPlan(user.plan);
+    return `
+      <article class="admin-item">
+        <div>
+          <strong>${escapeHtml(user.displayName || user.id)}</strong>
+          <small>${escapeHtml(user.id)} · tg:${escapeHtml(user.telegramId || "-")} · @${escapeHtml(user.telegramUsername || "-")}</small>
+          <small>${escapeHtml(user.source)} · <b class="inline-badge" style="background:${safeColor(plan?.badgeColor, "#16a34a")};color:${safeColor(plan?.badgeTextColor, "#ffffff")}">${escapeHtml(user.plan)}</b> · ${user.isActive ? "فعال" : "غیرفعال"} · ${escapeHtml(featureSummary(user.features))}</small>
+        </div>
+        <div class="user-controls">
+          <select data-user-field="plan">${state.plans.map(planItem => `<option value="${escapeHtml(planItem.name)}" ${planItem.name === user.plan ? "selected" : ""}>${escapeHtml(planItem.name)}</option>`).join("")}</select>
+          <button class="mini-button" type="button" data-action="toggle-active">${user.isActive ? "غیرفعال" : "فعال"}</button>
+          <button class="mini-button" type="button" data-action="toggle-reminder">${user.remindersEnabled ? "قطع یادآوری" : "فعال یادآوری"}</button>
+        </div>
+      </article>
+    `;
+  }).join("");
 
   elements.usersList.querySelectorAll(".admin-item").forEach((item, index) => {
     const user = state.users[index];
@@ -160,14 +174,17 @@ function renderUsers() {
 }
 
 function renderCodes() {
-  elements.codesList.innerHTML = state.codes.map(code => `
-    <article class="admin-item">
-      <div>
-        <strong>${escapeHtml(code.code)}</strong>
-        <small>${escapeHtml(code.plan)} · ${toPersianNumber(code.uses)}/${toPersianNumber(code.maxUses)}</small>
-      </div>
-    </article>
-  `).join("");
+  elements.codesList.innerHTML = state.codes.map(code => {
+    const plan = findPlan(code.plan);
+    return `
+      <article class="admin-item">
+        <div>
+          <strong>${escapeHtml(code.code)}</strong>
+          <small><b class="inline-badge" style="background:${safeColor(plan?.badgeColor, "#16a34a")};color:${safeColor(plan?.badgeTextColor, "#ffffff")}">${escapeHtml(code.plan)}</b> · ${toPersianNumber(code.uses)}/${toPersianNumber(code.maxUses)}</small>
+        </div>
+      </article>
+    `;
+  }).join("");
 }
 
 async function saveSettings(event) {
@@ -203,9 +220,15 @@ async function addPlan() {
     body: JSON.stringify({
       id,
       name,
-      features: { ai: true, exportImport: true, feedbackCards: true, unlimitedCards: false },
+      badgeColor: "#2563eb",
+      badgeTextColor: "#ffffff",
+      features: defaultFeatures(),
       aiDailyLimit: 20,
       aiMonthlyLimit: 300,
+      dictionaryDailyLimit: 30,
+      dictionaryMonthlyLimit: 600,
+      correctionDailyLimit: 15,
+      correctionMonthlyLimit: 300,
       cardLimit: 200,
       sortOrder: state.plans.length,
       isDefault: false
@@ -237,6 +260,7 @@ async function reorderPlans(sourceId, targetId) {
   const plans = [...state.plans];
   const sourceIndex = plans.findIndex(plan => plan.id === sourceId);
   const targetIndex = plans.findIndex(plan => plan.id === targetId);
+  if (sourceIndex < 0 || targetIndex < 0) return;
   const [moved] = plans.splice(sourceIndex, 1);
   plans.splice(targetIndex, 0, moved);
   await Promise.all(plans.map((plan, index) => adminFetch(`/api/admin/plans/${encodeURIComponent(plan.id)}`, {
@@ -256,13 +280,13 @@ async function updateUser(id, payload) {
 
 async function createCode() {
   const planName = elements.codePlanInput.value;
-  const plan = state.plans.find(item => item.name === planName) || state.plans[0];
+  const plan = findPlan(planName) || state.plans[0];
   const code = await adminFetch("/api/admin/codes", {
     method: "POST",
     body: JSON.stringify({
       plan: plan?.name || "Free",
       maxUses: Number(elements.codeMaxUsesInput.value || 1),
-      features: plan?.features || { ai: true, exportImport: true, feedbackCards: true, unlimitedCards: true }
+      features: plan?.features || defaultFeatures()
     })
   });
   showToast(`کد ساخته شد: ${code.code}`);
@@ -274,13 +298,21 @@ function readPlanCard(card) {
   return {
     id: get("id").value.trim(),
     name: get("name").value.trim(),
+    badgeColor: get("badgeColor").value,
+    badgeTextColor: get("badgeTextColor").value,
     aiDailyLimit: Number(get("aiDailyLimit").value),
     aiMonthlyLimit: Number(get("aiMonthlyLimit").value),
+    dictionaryDailyLimit: Number(get("dictionaryDailyLimit").value),
+    dictionaryMonthlyLimit: Number(get("dictionaryMonthlyLimit").value),
+    correctionDailyLimit: Number(get("correctionDailyLimit").value),
+    correctionMonthlyLimit: Number(get("correctionMonthlyLimit").value),
     cardLimit: Number(get("cardLimit").value),
     sortOrder: Number(get("sortOrder").value),
     isDefault: get("isDefault").checked,
     features: {
       ai: get("feature-ai").checked,
+      dictionary: get("feature-dictionary").checked,
+      textCorrection: get("feature-textCorrection").checked,
       feedbackCards: get("feature-feedbackCards").checked,
       exportImport: get("feature-exportImport").checked,
       unlimitedCards: get("feature-unlimitedCards").checked
@@ -319,11 +351,32 @@ function setStatus(message, mode) {
 
 function featureSummary(features = {}) {
   const enabled = [];
-  if (features.ai) enabled.push("AI");
-  if (features.feedbackCards) enabled.push("Feedback");
+  if (features.ai) enabled.push("AI کارت");
+  if (features.dictionary) enabled.push("دیکشنری");
+  if (features.textCorrection) enabled.push("اصلاح");
+  if (features.feedbackCards) enabled.push("فیدبک");
   if (features.exportImport) enabled.push("Import");
-  if (features.unlimitedCards) enabled.push("Unlimited");
+  if (features.unlimitedCards) enabled.push("نامحدود");
   return enabled.join(" · ") || "محدود";
+}
+
+function defaultFeatures() {
+  return {
+    ai: true,
+    dictionary: true,
+    textCorrection: true,
+    exportImport: true,
+    feedbackCards: true,
+    unlimitedCards: false
+  };
+}
+
+function findPlan(nameOrId) {
+  return state.plans.find(plan => plan.name === nameOrId || plan.id === nameOrId);
+}
+
+function safeColor(value, fallback) {
+  return /^#[0-9a-f]{6}$/i.test(value || "") ? value : fallback;
 }
 
 function slugify(value) {

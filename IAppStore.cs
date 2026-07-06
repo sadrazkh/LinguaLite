@@ -17,8 +17,8 @@ public interface IAppStore
     Task<PlanDefinition> UpsertPlanAsync(PlanDefinition plan);
     Task<bool> DeletePlanAsync(string id);
     Task<PlanDefinition> GetEffectivePlanAsync(string planName);
-    Task<AiUsageSummary> GetAiUsageAsync(string userId, string planName);
-    Task<AiUsageSummary> TryConsumeAiRequestAsync(string userId, string planName);
+    Task<AiUsageSummary> GetAiUsageAsync(string userId, string planName, AiToolKind tool);
+    Task<AiUsageSummary> TryConsumeAiRequestAsync(string userId, string planName, AiToolKind tool);
     Task<AppSettingsState> GetSettingsAsync();
     Task<AppSettingsState> UpdateSettingsAsync(Action<AppSettingsState> update);
     Task MarkReminderSentAsync(string userId, DateTimeOffset sentAt);

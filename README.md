@@ -1,42 +1,33 @@
 # LinguaLite
 
-مینی‌اپ تلگرام برای یادگیری زبان با لایتنر، دیتای جدا برای هر کاربر، کارت فیدبک، خروجی/ورودی دیتا، پنل ادمین و تکمیل خودکار با OpenRouter.
+مینی‌اپ تلگرام برای یادگیری زبان با لایتنر، کارت فیدبک، دیکشنری هوشمند، اصلاح و تحلیل متن، خروجی/ورودی JSON، ربات تلگرام و پنل ادمین جدا.
 
 ## اجرای لوکال
 
 ```powershell
-dotnet run
+dotnet run --launch-profile http
 ```
 
-پروژه با `LinguaLite.sln` باز می‌شود.
+آدرس لوکال:
 
-در حالت Development اگر `DATABASE_URL` یا `POSTGRES_CONNECTION_STRING` تنظیم نشده باشد، برنامه برای تست لوکال از فایل `App_Data/local-database.json` استفاده می‌کند. این فقط برای لوکال است؛ روی سرور باید Postgres تنظیم شود.
+```text
+http://localhost:5005
+http://localhost:5005/admin
+```
 
-توکن ادمین لوکال داخل `Properties/launchSettings.json` تنظیم شده:
+توکن ادمین لوکال در `Properties/launchSettings.json` تنظیم شده است:
 
 ```text
 ADMIN_TOKEN=local-admin
 ```
 
-اگر خواستی لوکال را هم با Postgres تست کنی:
-
-```powershell
-docker compose -f docker-compose.local.yml up -d
-```
-
-بعد این env را برای اجرای اپ بگذار:
-
-```text
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/lingualite
-ADMIN_TOKEN=local-admin
-OPENROUTER_MODEL=google/gemma-4-31b-it:free
-```
+در حالت Development اگر `DATABASE_URL` یا `POSTGRES_CONNECTION_STRING` وجود نداشته باشد، اپ برای تست لوکال از فایل `App_Data/local-database.json` استفاده می‌کند. این پوشه در گیت ignore است.
 
 ## دیتابیس
 
-ذخیره‌سازی روی PostgreSQL است. دیگر دیتای اصلی داخل کانتینر یا فایل `/data/database.json` ذخیره نمی‌شود.
+در سرور باید PostgreSQL تنظیم شود تا دیتا با هر دیپلوی نپرد.
 
-یکی از این دو env را تنظیم کن:
+یکی از این envها کافی است:
 
 ```text
 DATABASE_URL=postgres://USER:PASSWORD@HOST:5432/DATABASE
@@ -48,78 +39,95 @@ DATABASE_URL=postgres://USER:PASSWORD@HOST:5432/DATABASE
 POSTGRES_CONNECTION_STRING=Host=HOST;Port=5432;Database=DATABASE;Username=USER;Password=PASSWORD;SSL Mode=Prefer
 ```
 
-اگر در CapRover از One-Click App برای PostgreSQL استفاده می‌کنی، همان مشخصات دیتابیس را در env اپ اصلی بگذار. تا وقتی این env به همان دیتابیس اشاره کند، با هر دیپلوی دیتا نمی‌پرد.
+برای دیتابیس CapRover مثل `srv-captain--kousar-db` معمولا الگو این است:
 
-## تنظیمات CapRover
+```text
+DATABASE_URL=postgres://postgres:YOUR_PASSWORD@srv-captain--kousar-db:5432/postgres
+```
 
-Envهای اصلی:
+اگر پسورد کاراکتر خاص دارد، URL encode کن یا از `POSTGRES_CONNECTION_STRING` استفاده کن.
+
+## Envهای اصلی CapRover
 
 ```text
 DATABASE_URL=postgres://...
-TELEGRAM_BOT_TOKEN=توکن_بات_تلگرام
+TELEGRAM_BOT_TOKEN=توکن_ربات_تلگرام
 ADMIN_TOKEN=یک_توکن_قوی_برای_ادمین
 OPENROUTER_MODEL=google/gemma-4-31b-it:free
+OPENROUTER_REFERER=https://YOUR_DOMAIN
 ```
 
-کلید OpenRouter اختیاری است. اگر روی سرور بگذاری، همه کاربران از همان استفاده می‌کنند:
+کلید OpenRouter اختیاری است:
 
 ```text
 OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
-اگر نگذاری، کاربر می‌تواند کلید خودش را در بخش ابزار وارد کند.
+اگر کلید را روی سرور نگذاری، کاربر می‌تواند کلید خودش را در تب اکانت وارد کند. کلید کاربر فقط در مرورگر همان دستگاه ذخیره می‌شود.
 
 ## پنل ادمین
 
-پنل ادمین داخل Mini App نمایش داده نمی‌شود و جداست:
+پنل ادمین داخل مینی‌اپ نمایش داده نمی‌شود و جداست:
 
 ```text
 https://YOUR_DOMAIN/admin
 ```
 
-با مقدار `ADMIN_TOKEN` وارد شو. از این پنل می‌توانی این‌ها را مدیریت کنی:
+در پنل ادمین می‌توانی این‌ها را مدیریت کنی:
 
-- کاربران، شناسه تلگرام، username، chat id، فعال/غیرفعال بودن و یادآوری
-- پلن‌ها، سقف روزانه/ماهانه AI و سقف کارت‌ها
-- کدهای دسترسی
+- کاربران، Telegram ID، username، وضعیت فعال/غیرفعال و یادآوری
+- پلن‌ها، رنگ badge، دسترسی ابزارها و سقف روزانه/ماهانه
+- سهمیه جدا برای کارت‌سازی AI، دیکشنری و اصلاح متن
+- کدهای فعال‌سازی پلن
 - مدل OpenRouter
-- تنظیمات ربات، لینک Mini App و Webhook
+- تنظیمات ربات، Mini App URL و Webhook
 
-برای محدودیت‌ها، مقدار `-1` یعنی نامحدود.
+برای محدودیت‌ها مقدار `-1` یعنی نامحدود.
 
 ## ربات تلگرام
 
-ربات از همین اپ webhook می‌گیرد:
+Webhook:
 
 ```text
 https://YOUR_DOMAIN/api/bot/webhook
 ```
 
-در پنل ادمین مقدار `Public Base URL` و `Telegram Mini App URL` را تنظیم کن و بعد دکمه تنظیم Webhook را بزن.
+در پنل ادمین مقدارهای `Public Base URL` و `Telegram Mini App URL` را تنظیم کن و بعد دکمه تنظیم Webhook را بزن.
 
-دستورهای پایه ربات:
+فرمان‌های ربات:
 
 ```text
 /start
+/help
+/status
 /due
+/code LL-XXXX
+/remind_on
+/remind_off
 /add word | معنی
 /feedback wrong -> correct
 ```
 
-## شناسه کاربر و سشن
+ربات Telegram ID، username و chat id را ذخیره می‌کند تا در پنل ادمین دیده شوند و یادآوری‌ها کار کنند.
 
-در تلگرام، شناسه کاربر از `initData` معتبر تلگرام گرفته می‌شود و به شکل `tg_USER_ID` ذخیره می‌شود. بنابراین همان کاربر روی موبایل و دسکتاپ به همان کارت‌ها می‌رسد.
+## شناسه کاربر
 
-در حالت توسعه بدون `TELEGRAM_BOT_TOKEN`، اپ از `X-Dev-User-Id` یا شناسه لوکال مرورگر استفاده می‌کند.
+در تلگرام، کاربر با `initData` معتبر تلگرام شناسایی می‌شود و شناسه ذخیره‌سازی به شکل `tg_USER_ID` است. بنابراین همان کاربر روی گوشی و کامپیوتر به کارت‌های خودش می‌رسد.
+
+در لوکال، اپ از `X-Dev-User-Id` یا شناسه محلی مرورگر استفاده می‌کند.
 
 ## قابلیت‌ها
 
 - کارت‌های Word، Sentence، Question و Feedback
-- کارت فیدبک با دستور AI جدا برای اصلاح اشتباه واقعی کاربر
-- تکمیل کارت با OpenRouter
-- Export و Import کارت‌ها با JSON
-- کد فعال‌سازی برای باز کردن قابلیت‌ها
-- پنل ادمین برای دیدن کاربران، فعال/غیرفعال کردن کاربر و ساخت access code
+- مرور لایتنر با نمایش اول روی کارت و بعد دکمه پشت کارت
+- افزودن، ویرایش و حذف کارت برای کاربر
+- فیدبک کارت برای اشتباه‌های واقعی مثل `I programmer -> I am a programmer`
+- تکمیل خودکار کارت با OpenRouter
+- دیکشنری هوشمند با دکمه افزودن مستقیم به لایتنر
+- اصلاح و تحلیل متن با دکمه افزودن به فیدبک‌ها
+- خروجی و ورودی JSON با پشتیبانی بهتر از فارسی
+- کد فعال‌سازی پلن برای کاربر
+- پنل ادمین با پلن‌های رنگی و سهمیه‌های جدا
 
 ## Deploy
 
@@ -139,10 +147,10 @@ caprover deploy
 
 ## OpenRouter
 
-مدل پیش‌فرض فعلی:
+مدل پیش‌فرض:
 
 ```text
 google/gemma-4-31b-it:free
 ```
 
-مدل از config سرور می‌آید، نه از UI کاربر. برای تغییر مدل، مقدار `OPENROUTER_MODEL` را عوض کن.
+مدل از env یا تنظیمات پنل ادمین می‌آید. برای تغییر مدل در سرور، `OPENROUTER_MODEL` را عوض کن یا از پنل ادمین مقدار OpenRouter Model را ذخیره کن.
