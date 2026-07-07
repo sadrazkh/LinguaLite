@@ -315,7 +315,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
             }
 
             card.CreatedAt = card.CreatedAt == default ? DateTimeOffset.UtcNow : card.CreatedAt;
-            card.NextReviewAt = card.NextReviewAt == default ? DateTimeOffset.UtcNow : card.NextReviewAt;
+            card.NextReviewAt = card.NextReviewAt == default ? LeitnerSchedule.TodayUtc() : card.NextReviewAt;
             await InsertCardAsync(connection, transaction, userId, card);
             existingIds.Add(card.Id);
             imported++;
@@ -937,7 +937,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
             LEFT JOIN LATERAL (
                 SELECT
                     COUNT(*) FILTER (WHERE NOT is_archived)::int AS total_cards,
-                    COUNT(*) FILTER (WHERE NOT is_archived AND next_review_at <= now())::int AS due_cards
+                    COUNT(*) FILTER (WHERE NOT is_archived AND (next_review_at AT TIME ZONE 'UTC')::date <= @today)::int AS due_cards
                 FROM app_cards c
                 WHERE c.user_id = u.id
             ) card_counts ON true

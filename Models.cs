@@ -188,6 +188,7 @@ public sealed class DeckState
     public static DeckState CreateSeed()
     {
         var now = DateTimeOffset.UtcNow;
+        var today = LeitnerSchedule.TodayUtc(now);
         return new DeckState
         {
             Cards =
@@ -204,7 +205,7 @@ public sealed class DeckState
                     Type = CardType.Word,
                     Box = 1,
                     CreatedAt = now.AddDays(-2),
-                    NextReviewAt = now.AddMinutes(-10)
+                    NextReviewAt = today
                 }
             ]
         };
@@ -284,7 +285,7 @@ public sealed class PackageCard
         Type = Type,
         Box = 1,
         CreatedAt = DateTimeOffset.UtcNow,
-        NextReviewAt = DateTimeOffset.UtcNow,
+        NextReviewAt = LeitnerSchedule.TodayUtc(),
         SourcePackageId = packageId,
         SourcePackageCardId = Id
     };
@@ -444,7 +445,7 @@ public sealed record DeckSummary(int TotalCards, int DueCards, int LearnedCards,
 
         return new DeckSummary(
             activeCards.Count,
-            activeCards.Count(card => card.NextReviewAt <= now),
+            activeCards.Count(card => LeitnerSchedule.IsDue(card, now)),
             activeCards.Count(card => card.Box >= 4),
             totalReviews == 0 ? 0 : Math.Round((double)correctReviews / totalReviews * 100, 1),
             Enumerable.Range(1, 5).ToDictionary(box => box, box => activeCards.Count(card => card.Box == box)));
@@ -453,12 +454,24 @@ public sealed record DeckSummary(int TotalCards, int DueCards, int LearnedCards,
 
 public static class LeitnerSchedule
 {
-    public static TimeSpan DelayFor(int box) => box switch
+    public static int DelayDaysFor(int box) => box switch
     {
-        <= 1 => TimeSpan.FromMinutes(10),
-        2 => TimeSpan.FromHours(8),
-        3 => TimeSpan.FromDays(1),
-        4 => TimeSpan.FromDays(3),
-        _ => TimeSpan.FromDays(7)
+        <= 1 => 1,
+        2 => 1,
+        3 => 3,
+        4 => 7,
+        _ => 30
     };
+
+    public static DateTimeOffset TodayUtc(DateTimeOffset? now = null)
+    {
+        var utcDate = (now ?? DateTimeOffset.UtcNow).UtcDateTime.Date;
+        return new DateTimeOffset(utcDate, TimeSpan.Zero);
+    }
+
+    public static DateTimeOffset NextReviewAtFor(int box, DateTimeOffset? now = null) =>
+        TodayUtc(now).AddDays(DelayDaysFor(box));
+
+    public static bool IsDue(FlashCard card, DateTimeOffset? now = null) =>
+        card.NextReviewAt.UtcDateTime.Date <= TodayUtc(now).UtcDateTime.Date;
 }

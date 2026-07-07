@@ -188,7 +188,7 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
     {
         var deck = await store.GetDeckAsync(profile.Id);
         var activeCards = deck.Cards.Where(card => !card.IsArchived).ToList();
-        var due = activeCards.Count(card => card.NextReviewAt <= DateTimeOffset.UtcNow);
+        var due = activeCards.Count(card => LeitnerSchedule.IsDue(card));
         await SendMessageAsync(chatId,
             $"وضعیت اکانت:\nپلن: {profile.Plan}\nکارت‌ها: {activeCards.Count}\nآماده مرور: {due}\nیادآوری: {(profile.RemindersEnabled ? "روشن" : "خاموش")}",
             settings);
@@ -197,7 +197,7 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
     private async Task SendDueAsync(UserProfile profile, long chatId, AppSettingsState settings)
     {
         var deck = await store.GetDeckAsync(profile.Id);
-        var dueCount = deck.Cards.Count(card => !card.IsArchived && card.NextReviewAt <= DateTimeOffset.UtcNow);
+        var dueCount = deck.Cards.Count(card => !card.IsArchived && LeitnerSchedule.IsDue(card));
         await SendMessageAsync(chatId,
             dueCount == 0 ? "فعلا کارت آماده مرور نداری." : $"امروز {dueCount} کارت برای مرور داری.",
             settings);
@@ -243,7 +243,7 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
             Type = CardType.Word,
             Box = 1,
             CreatedAt = DateTimeOffset.UtcNow,
-            NextReviewAt = DateTimeOffset.UtcNow,
+            NextReviewAt = LeitnerSchedule.TodayUtc(),
             Notes = "Added from Telegram bot"
         });
         await store.RecordActivityAsync(profile.Id, ActivityKind.CardAdded);
@@ -272,7 +272,7 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
             Type = CardType.Feedback,
             Box = 1,
             CreatedAt = DateTimeOffset.UtcNow,
-            NextReviewAt = DateTimeOffset.UtcNow
+            NextReviewAt = LeitnerSchedule.TodayUtc()
         });
         await store.RecordActivityAsync(profile.Id, ActivityKind.CardAdded);
         await SendMessageAsync(chatId, "کارت فیدبک اضافه شد.", settings);

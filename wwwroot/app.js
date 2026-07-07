@@ -1203,15 +1203,17 @@ function nextReviewLabel(value) {
   if (!value) return "مرور: -";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "مرور: -";
-  const due = date <= new Date();
+  const due = utcDayNumber(date) <= utcDayNumber(new Date());
   const formatted = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
     year: "numeric",
     month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit"
+    day: "numeric"
   }).format(date);
   return due ? `آماده مرور · ${formatted}` : `مرور بعدی · ${formatted}`;
+}
+
+function utcDayNumber(date) {
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 }
 
 function openRouterHeaders() {

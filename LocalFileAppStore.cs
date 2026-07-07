@@ -120,7 +120,7 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
                 }
 
                 card.CreatedAt = card.CreatedAt == default ? DateTimeOffset.UtcNow : card.CreatedAt.ToUniversalTime();
-                card.NextReviewAt = card.NextReviewAt == default ? DateTimeOffset.UtcNow : card.NextReviewAt.ToUniversalTime();
+                card.NextReviewAt = card.NextReviewAt == default ? LeitnerSchedule.TodayUtc() : card.NextReviewAt.ToUniversalTime();
                 card.LastReviewedAt = card.LastReviewedAt?.ToUniversalTime();
                 deck.Cards.Add(card);
                 imported++;
@@ -466,7 +466,7 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
             db.Decks.TryGetValue(userId, out var deck);
             var activity = db.UserActivity.FirstOrDefault(item => item.UserId == userId && item.ActivityDate == today);
             var activeCards = deck?.Cards.Where(card => !card.IsArchived).ToList() ?? new List<FlashCard>();
-            var dueCards = activeCards.Count(card => card.NextReviewAt <= DateTimeOffset.UtcNow);
+            var dueCards = activeCards.Count(card => LeitnerSchedule.IsDue(card));
             return new AdminUserMetrics
             {
                 UserId = userId,

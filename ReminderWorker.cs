@@ -36,7 +36,7 @@ public sealed class ReminderWorker(IServiceProvider services, ILogger<ReminderWo
             if (user.LastReminderAt.HasValue && user.LastReminderAt.Value.UtcDateTime.Date == now.UtcDateTime.Date) continue;
 
             var deck = await store.GetDeckAsync(user.Id);
-            var dueCount = deck.Cards.Count(card => card.NextReviewAt <= now);
+            var dueCount = deck.Cards.Count(card => !card.IsArchived && LeitnerSchedule.IsDue(card, now));
             if (dueCount <= 0) continue;
 
             await bot.SendReminderAsync(user, dueCount, settings);

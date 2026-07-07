@@ -146,7 +146,7 @@ api.MapGet("/cards/due", async (HttpContext http, IConfiguration config, IAppSto
     var now = DateTimeOffset.UtcNow;
     var cards = (await store.GetDeckAsync(profile.Id)).Cards
         .Where(card => !card.IsArchived)
-        .Where(card => card.NextReviewAt <= now)
+        .Where(card => LeitnerSchedule.IsDue(card, now))
         .OrderBy(card => card.NextReviewAt)
         .ThenBy(card => card.Box)
         .Take(25)
@@ -196,7 +196,7 @@ api.MapPost("/cards", async (HttpContext http, IConfiguration config, CreateCard
         Notes = request.Notes?.Trim() ?? string.Empty,
         Type = request.Type,
         CreatedAt = DateTimeOffset.UtcNow,
-        NextReviewAt = DateTimeOffset.UtcNow,
+        NextReviewAt = LeitnerSchedule.TodayUtc(),
         Box = 1
     };
 
@@ -270,7 +270,7 @@ api.MapPost("/cards/{id:guid}/review", async (
             item.Box = 1;
         }
 
-        item.NextReviewAt = now.Add(LeitnerSchedule.DelayFor(item.Box));
+        item.NextReviewAt = LeitnerSchedule.NextReviewAtFor(item.Box, now);
     });
 
     if (card is null) return Results.NotFound(new { message = "کارت پیدا نشد." });
