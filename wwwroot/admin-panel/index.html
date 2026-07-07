@@ -76,6 +76,29 @@
         <div class="plans-board" id="plansBoard"></div>
       </section>
 
+      <section class="panel">
+        <div class="panel-title">
+          <strong>بسته‌های آماده</strong>
+          <span>پکیج‌های لغت یا تمرین بساز تا کاربرها بتوانند هر روز تعداد مشخصی کارت از آن‌ها به لایتنرشان اضافه کنند.</span>
+        </div>
+        <form class="package-editor" id="packageForm">
+          <div class="settings-grid">
+            <label><span>شناسه</span><input id="packageIdInput" placeholder="essential-500"></label>
+            <label><span>عنوان</span><input id="packageTitleInput" placeholder="۵۰۰ واژه کاربردی"></label>
+            <label><span>پلن‌های مجاز</span><input id="packagePlansInput" placeholder="Pro, Plus - خالی یعنی همه"></label>
+            <label><span>ترتیب</span><input id="packageSortInput" type="number" value="0"></label>
+            <label class="check-row"><input id="packagePublishedInput" type="checkbox" checked> <span>منتشر شده</span></label>
+          </div>
+          <label><span>توضیح بسته</span><textarea id="packageDescriptionInput" rows="2" placeholder="توضیح کوتاه برای کاربر"></textarea></label>
+          <label><span>کارت‌ها JSON</span><textarea class="mixed-input" id="packageCardsInput" rows="9" spellcheck="false" placeholder='[{"id":"ability","front":"ability","back":"توانایی","example":"She has the ability...","prompt":"What does ability mean?","answer":"توانایی","notes":"...","type":"Word"}]'></textarea></label>
+          <div class="tool-row">
+            <button class="primary-button" id="savePackageButton" type="submit">ذخیره بسته</button>
+            <button class="secondary-button" id="newPackageButton" type="button">بسته جدید</button>
+          </div>
+        </form>
+        <div class="admin-list packages-admin-list" id="packagesList"></div>
+      </section>
+
       <section class="panel broadcast-panel">
         <div class="panel-title">
           <strong>ارسال پیام با ربات</strong>

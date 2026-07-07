@@ -18,6 +18,10 @@ public interface IAppStore
     Task<PlanDefinition> UpsertPlanAsync(PlanDefinition plan);
     Task<bool> DeletePlanAsync(string id);
     Task<PlanDefinition> GetEffectivePlanAsync(string planName);
+    Task<List<LearningPackage>> GetPackagesAsync();
+    Task<LearningPackage> UpsertPackageAsync(LearningPackage package);
+    Task<bool> DeletePackageAsync(string id);
+    Task<PackageImportResult> ImportPackageCardsAsync(string userId, string planName, string packageId, int count);
     Task<AiUsageSummary> GetAiUsageAsync(string userId, string planName, AiToolKind tool);
     Task<AiUsageSummary> TryConsumeAiRequestAsync(string userId, string planName, AiToolKind tool);
     Task<BrowserLoginCode> CreateBrowserLoginCodeAsync(string userId, TimeSpan ttl);

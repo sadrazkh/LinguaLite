@@ -1,4 +1,4 @@
-const CACHE_NAME = "lingualite-v3";
+const CACHE_NAME = "lingualite-v4";
 const CORE_ASSETS = [
   "/",
   "/index.html",

@@ -13,6 +13,9 @@ const devUserId = getOrCreateDevUserId();
 const state = {
   due: [],
   cards: [],
+  archivedCards: [],
+  packages: [],
+  deckMode: "active",
   current: null,
   config: null,
   editingCardId: null,
@@ -57,6 +60,8 @@ const elements = {
   cancelEditButton: $("#cancelEditButton"),
   boxes: $("#boxes"),
   deckList: $("#deckList"),
+  packagesList: $("#packagesList"),
+  deckModeSelector: $("#deckModeSelector"),
   toast: $("#toast"),
   aiPanel: $("#aiPanel"),
   aiPanelTitle: $("#aiPanelTitle"),
@@ -186,7 +191,13 @@ function bindEvents() {
   elements.revealButton.addEventListener("click", revealCurrentCard);
   elements.rememberedButton.addEventListener("click", () => reviewCurrent(true));
   elements.forgotButton.addEventListener("click", () => reviewCurrent(false));
-  elements.refreshButton.addEventListener("click", loadAll);
+  elements.refreshButton.addEventListener("click", refreshApp);
+  document.querySelectorAll('input[name="deckMode"]').forEach((radio) => {
+    radio.addEventListener("change", () => {
+      state.deckMode = radio.value;
+      renderDeckSection();
+    });
+  });
   elements.browserLoginForm.addEventListener("submit", browserLogin);
   elements.form.addEventListener("submit", saveCard);
   elements.cancelEditButton.addEventListener("click", resetCardForm);
@@ -231,11 +242,13 @@ function applyThemeMode(mode) {
 
 async function loadAll() {
   try {
-    const [config, summary, due, cards] = await Promise.all([
+    const [config, summary, due, cards, archivedCards, packages] = await Promise.all([
       fetchJson("/api/config"),
       fetchJson("/api/deck"),
       fetchJson("/api/cards/due"),
-      fetchJson("/api/cards")
+      fetchJson("/api/cards"),
+      fetchJson("/api/cards?archived=true"),
+      fetchJson("/api/packages")
     ]);
 
     state.config = config;
@@ -243,12 +256,14 @@ async function loadAll() {
     elements.authGate.hidden = true;
     state.due = due;
     state.cards = cards;
+    state.archivedCards = archivedCards;
+    state.packages = packages;
     renderProfile(config);
     renderUserInfo(config);
     updateSummary(summary);
     renderQuota(config);
     renderBoxes(summary.boxes);
-    renderDeck(cards);
+    renderDeckSection();
     pickNextCard();
   } catch (error) {
     if (error.status === 401) {
@@ -257,6 +272,22 @@ async function loadAll() {
     }
     showLoadError(error);
     showToast(error.message || "دریافت اطلاعات انجام نشد.");
+  }
+}
+
+async function refreshApp() {
+  setButtonLoading(elements.refreshButton, true, "...");
+  try {
+    if ("serviceWorker" in navigator) {
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (registration) await registration.update();
+    }
+    await loadAll();
+    showToast("اپ و داده‌ها تازه شد.");
+  } catch (error) {
+    showToast(error.message || "تازه‌سازی انجام نشد.");
+  } finally {
+    setButtonLoading(elements.refreshButton, false, "↻");
   }
 }
 
@@ -805,6 +836,79 @@ function renderDeck(cards) {
   });
 }
 
+function renderDeckSection() {
+  elements.boxes.hidden = state.deckMode !== "active";
+  elements.deckList.hidden = state.deckMode === "packages";
+  elements.packagesList.hidden = state.deckMode !== "packages";
+  if (state.deckMode === "packages") {
+    renderPackages();
+    return;
+  }
+
+  renderDeck(state.deckMode === "archived" ? state.archivedCards : state.cards, state.deckMode === "archived");
+}
+
+function renderDeck(cards, archived = false) {
+  const emptyText = archived
+    ? `<div class="empty-state"><strong>آرشیو خالی است.</strong><span>کارت‌هایی که فعلا نمی‌خواهی مرور شوند اینجا می‌آیند.</span></div>`
+    : `<div class="empty-state"><strong>هنوز کارتی نداری.</strong><span>از بخش افزودن شروع کن.</span></div>`;
+  elements.deckList.innerHTML = cards.length ? cards.map((card) => `
+    <article class="deck-item ${card.type === "Feedback" ? "feedback-item" : ""}" data-card-id="${escapeHtml(card.id)}">
+      <div class="deck-head">
+        <h3 class="mixed">${escapeHtml(card.front)}</h3>
+        <span>${typeLabels[card.type] ?? "کارت"}</span>
+      </div>
+      <div class="deck-back mixed" hidden>${escapeHtml(card.back)}</div>
+      <footer>
+        <span>جعبه ${toPersianNumber(card.box)} · ${escapeHtml(nextReviewLabel(card.nextReviewAt))}</span>
+        <div class="deck-actions">
+          <button class="mini-button" type="button" data-action="toggle-back">نمایش پشت</button>
+          ${archived ? "" : `<button class="mini-button" type="button" data-action="edit">ویرایش</button>`}
+          <button class="mini-button" type="button" data-action="archive">${archived ? "بازگردانی" : "آرشیو"}</button>
+          <button class="mini-button danger" type="button" data-action="delete">حذف</button>
+        </div>
+      </footer>
+    </article>
+  `).join("") : emptyText;
+
+  elements.deckList.querySelectorAll(".deck-item").forEach((item) => {
+    const id = item.dataset.cardId;
+    item.querySelector('[data-action="toggle-back"]').addEventListener("click", (event) => toggleDeckBack(item, event.currentTarget));
+    item.querySelector('[data-action="edit"]')?.addEventListener("click", () => startEditCard(id));
+    item.querySelector('[data-action="archive"]').addEventListener("click", () => archiveCard(id, !archived));
+    item.querySelector('[data-action="delete"]').addEventListener("click", () => deleteCard(id));
+  });
+}
+
+function renderPackages() {
+  elements.packagesList.innerHTML = state.packages.length ? state.packages.map((item) => {
+    const locked = !item.hasAccess;
+    const plans = arrayOf(item.requiredPlans).length ? arrayOf(item.requiredPlans).join("، ") : "همه پلن‌ها";
+    return `
+      <article class="package-card ${locked ? "locked" : ""}" data-package-id="${escapeHtml(item.id)}">
+        <div class="package-head">
+          <div>
+            <strong>${escapeHtml(item.title)}</strong>
+            <small>${escapeHtml(plans)}</small>
+          </div>
+          <span>${toPersianNumber(item.addedCards || 0)} / ${toPersianNumber(item.totalCards || 0)}</span>
+        </div>
+        <p class="mixed">${escapeHtml(item.description || "")}</p>
+        <div class="package-progress"><i style="width:${packagePercent(item)}%"></i></div>
+        <div class="package-actions">
+          <input type="number" min="1" max="100" value="${Math.min(10, Math.max(1, item.availableCards || 1))}" ${locked ? "disabled" : ""}>
+          <button class="primary-button compact" type="button" data-action="import-package" ${locked || !item.availableCards ? "disabled" : ""}>افزودن امروز</button>
+        </div>
+        <small class="${locked ? "danger-text" : ""}">${locked ? escapeHtml(item.accessMessage || "پلن شما دسترسی ندارد.") : `${toPersianNumber(item.availableCards || 0)} کارت آماده اضافه شدن`}</small>
+      </article>
+    `;
+  }).join("") : `<div class="empty-state"><strong>بسته‌ای منتشر نشده.</strong><span>از پنل ادمین بسته آماده بساز.</span></div>`;
+
+  elements.packagesList.querySelectorAll(".package-card").forEach((item) => {
+    item.querySelector('[data-action="import-package"]')?.addEventListener("click", () => importPackage(item));
+  });
+}
+
 function toggleDeckBack(item, button) {
   const back = item.querySelector(".deck-back");
   back.hidden = !back.hidden;
@@ -812,7 +916,7 @@ function toggleDeckBack(item, button) {
 }
 
 function startEditCard(id) {
-  const card = state.cards.find(item => item.id === id);
+  const card = [...state.cards, ...state.archivedCards].find(item => item.id === id);
   if (!card) return;
   state.editingCardId = id;
   fillCardForm(card);
@@ -820,6 +924,47 @@ function startEditCard(id) {
   elements.saveCardButton.textContent = "ذخیره تغییرات";
   elements.cancelEditButton.hidden = false;
   switchView("add");
+}
+
+async function archiveCard(id, archived) {
+  try {
+    await fetchJson(`/api/cards/${id}/archive`, {
+      method: "POST",
+      body: JSON.stringify({ archived })
+    });
+    showToast(archived ? "کارت آرشیو شد." : "کارت به لیست فعال برگشت.");
+    await loadAll();
+  } catch (error) {
+    showToast(error.message || "تغییر وضعیت کارت انجام نشد.");
+  }
+}
+
+async function importPackage(item) {
+  const id = item.dataset.packageId;
+  const count = Number(item.querySelector("input")?.value || 10);
+  const button = item.querySelector('[data-action="import-package"]');
+  setButtonLoading(button, true, "در حال افزودن...");
+  try {
+    const result = await fetchJson(`/api/packages/${encodeURIComponent(id)}/import`, {
+      method: "POST",
+      body: JSON.stringify({ count })
+    });
+    showToast(result.message || `${toPersianNumber(result.added || 0)} کارت اضافه شد.`);
+    await loadAll();
+    state.deckMode = "packages";
+    const selected = document.querySelector('input[name="deckMode"][value="packages"]');
+    if (selected) selected.checked = true;
+    renderDeckSection();
+  } catch (error) {
+    showToast(error.message || "افزودن بسته انجام نشد.");
+  } finally {
+    setButtonLoading(button, false, "افزودن امروز");
+  }
+}
+
+function packagePercent(item) {
+  const total = Math.max(1, Number(item.totalCards || 0));
+  return Math.min(100, Math.round((Number(item.addedCards || 0) / total) * 100));
 }
 
 async function deleteCard(id) {

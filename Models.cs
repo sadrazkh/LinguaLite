@@ -227,6 +227,137 @@ public sealed class FlashCard
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset NextReviewAt { get; set; }
     public DateTimeOffset? LastReviewedAt { get; set; }
+    public bool IsArchived { get; set; }
+    public string SourcePackageId { get; set; } = string.Empty;
+    public string SourcePackageCardId { get; set; } = string.Empty;
+}
+
+public sealed class LearningPackage
+{
+    public string Id { get; set; } = string.Empty;
+    public string Title { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
+    public List<string> RequiredPlans { get; set; } = [];
+    public bool IsPublished { get; set; } = true;
+    public int SortOrder { get; set; }
+    public List<PackageCard> Cards { get; set; } = [];
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset UpdatedAt { get; set; }
+
+    public static List<LearningPackage> Defaults() =>
+    [
+        new()
+        {
+            Id = "essential-50",
+            Title = "۵۰ واژه کاربردی انگلیسی",
+            Description = "یک بسته شروع سریع از واژه‌های پرتکرار برای مکالمه، مطالعه و مرور روزانه.",
+            RequiredPlans = [],
+            IsPublished = true,
+            SortOrder = 0,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Cards = PackageCard.Essential50()
+        }
+    ];
+}
+
+public sealed class PackageCard
+{
+    public string Id { get; set; } = string.Empty;
+    public string Front { get; set; } = string.Empty;
+    public string Back { get; set; } = string.Empty;
+    public string Example { get; set; } = string.Empty;
+    public string Prompt { get; set; } = string.Empty;
+    public string Answer { get; set; } = string.Empty;
+    public string Notes { get; set; } = string.Empty;
+    public CardType Type { get; set; } = CardType.Word;
+
+    public FlashCard ToFlashCard(string packageId) => new()
+    {
+        Id = Guid.NewGuid(),
+        Front = Front,
+        Back = Back,
+        Example = Example,
+        Prompt = Prompt,
+        Answer = Answer,
+        Notes = Notes,
+        Type = Type,
+        Box = 1,
+        CreatedAt = DateTimeOffset.UtcNow,
+        NextReviewAt = DateTimeOffset.UtcNow,
+        SourcePackageId = packageId,
+        SourcePackageCardId = Id
+    };
+
+    public static List<PackageCard> Essential50()
+    {
+        string note = "واژه پرتکرار؛ با مثال یاد بگیر و در جمله خودت استفاده کن.";
+        return
+        [
+            Word("ability", "توانایی", "She has the ability to solve problems quickly.", note),
+            Word("achieve", "به دست آوردن، موفق شدن", "You can achieve your goal with daily practice.", note),
+            Word("advice", "نصیحت، توصیه", "I need your advice about this job.", note),
+            Word("agree", "موافق بودن", "I agree with your idea.", note),
+            Word("allow", "اجازه دادن", "This app allows you to review cards every day.", note),
+            Word("almost", "تقریبا", "I almost finished the lesson.", note),
+            Word("although", "اگرچه", "Although it was hard, I kept trying.", note),
+            Word("appear", "ظاهر شدن، به نظر رسیدن", "He appears calm before the exam.", note),
+            Word("available", "در دسترس", "The package is available for your plan.", note),
+            Word("avoid", "اجتناب کردن", "Avoid repeating the same mistake.", note),
+            Word("benefit", "فایده، سود", "One benefit of reading is better vocabulary.", note),
+            Word("challenge", "چالش", "Speaking is a useful challenge for learners.", note),
+            Word("common", "رایج، مشترک", "This is a common word in daily English.", note),
+            Word("compare", "مقایسه کردن", "Compare these two sentences.", note),
+            Word("complete", "کامل کردن", "Complete the card before saving it.", note),
+            Word("consider", "در نظر گرفتن", "Consider the context before you answer.", note),
+            Word("continue", "ادامه دادن", "Continue practicing for ten minutes.", note),
+            Word("create", "ساختن، ایجاد کردن", "Create a new sentence with this word.", note),
+            Word("decide", "تصمیم گرفتن", "I decided to study every morning.", note),
+            Word("describe", "توصیف کردن", "Describe your daily routine in English.", note),
+            Word("develop", "توسعه دادن، پیشرفت کردن", "You develop fluency by speaking often.", note),
+            Word("difference", "تفاوت", "What is the difference between these words?", note),
+            Word("difficult", "سخت، دشوار", "This grammar point is difficult at first.", note),
+            Word("effective", "موثر", "Short daily review is very effective.", note),
+            Word("effort", "تلاش", "Your effort will improve your English.", note),
+            Word("especially", "به‌خصوص", "I like podcasts, especially short ones.", note),
+            Word("explain", "توضیح دادن", "Can you explain this sentence?", note),
+            Word("focus", "تمرکز کردن", "Focus on one skill at a time.", note),
+            Word("improve", "بهبود دادن، بهتر شدن", "I want to improve my pronunciation.", note),
+            Word("include", "شامل بودن", "The lesson includes ten new words.", note),
+            Word("increase", "افزایش دادن", "Reading can increase your vocabulary.", note),
+            Word("instead", "به جای آن", "Use this phrase instead of the old one.", note),
+            Word("knowledge", "دانش", "Vocabulary knowledge helps you read faster.", note),
+            Word("method", "روش", "The Leitner method helps memory.", note),
+            Word("necessary", "ضروری، لازم", "Practice is necessary for progress.", note),
+            Word("notice", "متوجه شدن", "Notice the article before the noun.", note),
+            Word("opportunity", "فرصت", "Every conversation is an opportunity to learn.", note),
+            Word("particular", "خاص، مشخص", "Pay attention to this particular phrase.", note),
+            Word("possible", "ممکن", "It is possible to learn step by step.", note),
+            Word("practice", "تمرین کردن، تمرین", "Practice the sentence out loud.", note),
+            Word("prefer", "ترجیح دادن", "I prefer simple examples.", note),
+            Word("prepare", "آماده کردن", "Prepare five cards for tomorrow.", note),
+            Word("provide", "فراهم کردن", "The app provides examples and notes.", note),
+            Word("purpose", "هدف", "The purpose of review is long-term memory.", note),
+            Word("realize", "فهمیدن، متوجه شدن", "I realized my mistake after feedback.", note),
+            Word("receive", "دریافت کردن", "You receive a reminder from the bot.", note),
+            Word("remember", "به خاطر سپردن", "Try to remember the answer first.", note),
+            Word("require", "نیاز داشتن، لازم داشتن", "This package requires a Pro plan.", note),
+            Word("suggest", "پیشنهاد دادن", "The teacher suggested a better sentence.", note),
+            Word("useful", "مفید", "This example is useful for speaking.", note)
+        ];
+    }
+
+    private static PackageCard Word(string front, string back, string example, string notes) => new()
+    {
+        Id = front.ToLowerInvariant().Replace(" ", "-"),
+        Front = front,
+        Back = back,
+        Example = example,
+        Prompt = $"What does \"{front}\" mean?",
+        Answer = back,
+        Notes = notes,
+        Type = CardType.Word
+    };
 }
 
 public enum CardType
@@ -277,6 +408,11 @@ public sealed record AdminUpdateUserRequest(bool? IsActive, string? Plan, Featur
 public sealed record CreateAccessCodeRequest(string? Code, string? Plan, FeatureSet? Features, int? MaxUses);
 public sealed record UpdateAccessCodeRequest(string? Plan, FeatureSet? Features, int? MaxUses);
 public sealed record UpdateUserPreferencesRequest(string? LanguageLevel);
+public sealed record PackageCardRequest(string Id, string Front, string Back, string? Example, string? Prompt, string? Answer, string? Notes, CardType Type = CardType.Word);
+public sealed record UpsertPackageRequest(string Id, string Title, string Description, List<string>? RequiredPlans, bool IsPublished, int SortOrder, List<PackageCardRequest> Cards);
+public sealed record PackageImportRequest(int Count);
+public sealed record PackageImportResult(string PackageId, int Requested, int Added, int SkippedDuplicate, int SkippedAccess, string Message);
+public sealed record ArchiveCardRequest(bool Archived);
 public sealed record AdminBroadcastRequest(
     string Message,
     string Audience = "filtered",
@@ -302,15 +438,16 @@ public sealed record DeckSummary(int TotalCards, int DueCards, int LearnedCards,
     public static DeckSummary From(DeckState state)
     {
         var now = DateTimeOffset.UtcNow;
-        var totalReviews = state.Cards.Sum(card => card.TotalReviews);
-        var correctReviews = state.Cards.Sum(card => card.CorrectReviews);
+        var activeCards = state.Cards.Where(card => !card.IsArchived).ToList();
+        var totalReviews = activeCards.Sum(card => card.TotalReviews);
+        var correctReviews = activeCards.Sum(card => card.CorrectReviews);
 
         return new DeckSummary(
-            state.Cards.Count,
-            state.Cards.Count(card => card.NextReviewAt <= now),
-            state.Cards.Count(card => card.Box >= 4),
+            activeCards.Count,
+            activeCards.Count(card => card.NextReviewAt <= now),
+            activeCards.Count(card => card.Box >= 4),
             totalReviews == 0 ? 0 : Math.Round((double)correctReviews / totalReviews * 100, 1),
-            Enumerable.Range(1, 5).ToDictionary(box => box, box => state.Cards.Count(card => card.Box == box)));
+            Enumerable.Range(1, 5).ToDictionary(box => box, box => activeCards.Count(card => card.Box == box)));
     }
 }
 

@@ -68,8 +68,15 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                     correct_reviews integer NOT NULL DEFAULT 0,
                     created_at timestamptz NOT NULL,
                     next_review_at timestamptz NOT NULL,
-                    last_reviewed_at timestamptz NULL
+                    last_reviewed_at timestamptz NULL,
+                    is_archived boolean NOT NULL DEFAULT false,
+                    source_package_id text NOT NULL DEFAULT '',
+                    source_package_card_id text NOT NULL DEFAULT ''
                 );
+
+                ALTER TABLE app_cards ADD COLUMN IF NOT EXISTS is_archived boolean NOT NULL DEFAULT false;
+                ALTER TABLE app_cards ADD COLUMN IF NOT EXISTS source_package_id text NOT NULL DEFAULT '';
+                ALTER TABLE app_cards ADD COLUMN IF NOT EXISTS source_package_card_id text NOT NULL DEFAULT '';
 
                 CREATE INDEX IF NOT EXISTS ix_app_cards_user_due ON app_cards(user_id, next_review_at);
 
@@ -232,7 +239,8 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT id, front, back, example, prompt, answer, notes, type, box,
-                   total_reviews, correct_reviews, created_at, next_review_at, last_reviewed_at
+                   total_reviews, correct_reviews, created_at, next_review_at, last_reviewed_at,
+                   is_archived, source_package_id, source_package_card_id
             FROM app_cards
             WHERE user_id = @user_id
             ORDER BY created_at DESC;
@@ -567,6 +575,98 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
             ?? PlanDefinition.Defaults()[0];
     }
 
+    public async Task<List<LearningPackage>> GetPackagesAsync()
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        var packages = await LoadPackagesAsync(connection, null);
+        return packages.OrderBy(item => item.SortOrder).ThenBy(item => item.Title).ToList();
+    }
+
+    public async Task<LearningPackage> UpsertPackageAsync(LearningPackage package)
+    {
+        await EnsureReadyAsync();
+        NormalizePackage(package);
+
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var packages = await LoadPackagesAsync(connection, transaction);
+        var index = packages.FindIndex(item => item.Id.Equals(package.Id, StringComparison.OrdinalIgnoreCase));
+        if (index >= 0) packages[index] = package;
+        else packages.Add(package);
+        await SavePackagesAsync(connection, transaction, packages);
+        await transaction.CommitAsync();
+        return package;
+    }
+
+    public async Task<bool> DeletePackageAsync(string id)
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var packages = await LoadPackagesAsync(connection, transaction);
+        var removed = packages.RemoveAll(item => item.Id.Equals(id, StringComparison.OrdinalIgnoreCase)) > 0;
+        if (removed)
+        {
+            await SavePackagesAsync(connection, transaction, packages);
+            await transaction.CommitAsync();
+        }
+        else
+        {
+            await transaction.RollbackAsync();
+        }
+
+        return removed;
+    }
+
+    public async Task<PackageImportResult> ImportPackageCardsAsync(string userId, string planName, string packageId, int count)
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+
+        var packages = await LoadPackagesAsync(connection, transaction);
+        var package = packages.FirstOrDefault(item => item.Id.Equals(packageId, StringComparison.OrdinalIgnoreCase) && item.IsPublished);
+        if (package is null) return new PackageImportResult(packageId, count, 0, 0, 0, "بسته پیدا نشد.");
+        if (!HasPackageAccess(package, planName)) return new PackageImportResult(package.Id, count, 0, 0, count, "پلن شما به این بسته دسترسی ندارد.");
+
+        var deck = await LoadDeckAsync(connection, transaction, userId, lockRows: true);
+        var existingPackageCards = deck.Cards
+            .Where(card => card.SourcePackageId.Equals(package.Id, StringComparison.OrdinalIgnoreCase))
+            .Select(card => card.SourcePackageCardId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var existingSignatures = deck.Cards.Select(CardSignature).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var requested = Math.Clamp(count, 1, 100);
+        var added = 0;
+        var skippedDuplicate = 0;
+
+        foreach (var item in package.Cards)
+        {
+            if (added >= requested) break;
+            if (existingPackageCards.Contains(item.Id))
+            {
+                skippedDuplicate++;
+                continue;
+            }
+
+            var card = item.ToFlashCard(package.Id);
+            if (existingSignatures.Contains(CardSignature(card)))
+            {
+                skippedDuplicate++;
+                continue;
+            }
+
+            await InsertCardAsync(connection, transaction, userId, card);
+            existingPackageCards.Add(item.Id);
+            existingSignatures.Add(CardSignature(card));
+            added++;
+        }
+
+        await transaction.CommitAsync();
+        return new PackageImportResult(package.Id, requested, added, skippedDuplicate, 0,
+            added > 0 ? $"{added} کارت از بسته اضافه شد." : "کارت جدیدی برای اضافه کردن پیدا نشد.");
+    }
+
     public async Task<AiUsageSummary> GetAiUsageAsync(string userId, string planName, AiToolKind tool)
     {
         await EnsureReadyAsync();
@@ -836,8 +936,8 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
             FROM app_users u
             LEFT JOIN LATERAL (
                 SELECT
-                    COUNT(*)::int AS total_cards,
-                    COUNT(*) FILTER (WHERE next_review_at <= now())::int AS due_cards
+                    COUNT(*) FILTER (WHERE NOT is_archived)::int AS total_cards,
+                    COUNT(*) FILTER (WHERE NOT is_archived AND next_review_at <= now())::int AS due_cards
                 FROM app_cards c
                 WHERE c.user_id = u.id
             ) card_counts ON true
@@ -988,10 +1088,12 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         command.CommandText = """
             INSERT INTO app_cards
                 (id, user_id, front, back, example, prompt, answer, notes, type, box,
-                 total_reviews, correct_reviews, created_at, next_review_at, last_reviewed_at)
+                 total_reviews, correct_reviews, created_at, next_review_at, last_reviewed_at,
+                 is_archived, source_package_id, source_package_card_id)
             VALUES
                 (@id, @user_id, @front, @back, @example, @prompt, @answer, @notes, @type, @box,
-                 @total_reviews, @correct_reviews, @created_at, @next_review_at, @last_reviewed_at);
+                 @total_reviews, @correct_reviews, @created_at, @next_review_at, @last_reviewed_at,
+                 @is_archived, @source_package_id, @source_package_card_id);
             """;
         AddCardParameters(command, userId, card);
         await command.ExecuteNonQueryAsync();
@@ -1015,7 +1117,10 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                 correct_reviews = @correct_reviews,
                 created_at = @created_at,
                 next_review_at = @next_review_at,
-                last_reviewed_at = @last_reviewed_at
+                last_reviewed_at = @last_reviewed_at,
+                is_archived = @is_archived,
+                source_package_id = @source_package_id,
+                source_package_card_id = @source_package_card_id
             WHERE id = @id AND user_id = @user_id;
             """;
         AddCardParameters(command, userId, card);
@@ -1028,7 +1133,8 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         command.Transaction = transaction;
         command.CommandText = """
             SELECT id, front, back, example, prompt, answer, notes, type, box,
-                   total_reviews, correct_reviews, created_at, next_review_at, last_reviewed_at
+                   total_reviews, correct_reviews, created_at, next_review_at, last_reviewed_at,
+                   is_archived, source_package_id, source_package_card_id
             FROM app_cards
             WHERE user_id = @user_id AND id = @id
             FOR UPDATE;
@@ -1038,6 +1144,106 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         await using var reader = await command.ExecuteReaderAsync();
         return await reader.ReadAsync() ? ReadCard(reader) : null;
     }
+
+    private static async Task<DeckState> LoadDeckAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction, string userId, bool lockRows = false)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"""
+            SELECT id, front, back, example, prompt, answer, notes, type, box,
+                   total_reviews, correct_reviews, created_at, next_review_at, last_reviewed_at,
+                   is_archived, source_package_id, source_package_card_id
+            FROM app_cards
+            WHERE user_id = @user_id
+            ORDER BY created_at DESC
+            {(lockRows ? "FOR UPDATE" : string.Empty)};
+            """;
+        command.Parameters.AddWithValue("user_id", userId);
+
+        var deck = new DeckState();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            deck.Cards.Add(ReadCard(reader));
+        }
+
+        return deck;
+    }
+
+    private static async Task<List<LearningPackage>> LoadPackagesAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT value::text FROM app_settings WHERE key = 'packages';";
+        var value = await command.ExecuteScalarAsync();
+        var packages = value is string json
+            ? JsonSerializer.Deserialize<List<LearningPackage>>(json, JsonOptions) ?? []
+            : [];
+
+        if (packages.Count == 0)
+        {
+            packages = LearningPackage.Defaults();
+            await SavePackagesAsync(connection, transaction, packages);
+        }
+
+        foreach (var package in packages)
+        {
+            NormalizePackage(package);
+        }
+
+        return packages.OrderBy(item => item.SortOrder).ThenBy(item => item.Title).ToList();
+    }
+
+    private static async Task SavePackagesAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction, List<LearningPackage> packages)
+    {
+        foreach (var package in packages)
+        {
+            NormalizePackage(package);
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO app_settings (key, value)
+            VALUES ('packages', @value)
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+            """;
+        command.Parameters.Add("value", NpgsqlDbType.Jsonb).Value = JsonSerializer.Serialize(packages, JsonOptions);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static void NormalizePackage(LearningPackage package)
+    {
+        package.Id = string.IsNullOrWhiteSpace(package.Id) ? Slug(package.Title) : Slug(package.Id);
+        package.Title = string.IsNullOrWhiteSpace(package.Title) ? package.Id : package.Title.Trim();
+        package.Description = package.Description?.Trim() ?? string.Empty;
+        package.RequiredPlans = package.RequiredPlans
+            .Select(item => item.Trim())
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        package.CreatedAt = package.CreatedAt == default ? DateTimeOffset.UtcNow : package.CreatedAt;
+        package.UpdatedAt = DateTimeOffset.UtcNow;
+
+        foreach (var card in package.Cards)
+        {
+            card.Id = string.IsNullOrWhiteSpace(card.Id) ? Slug(card.Front) : Slug(card.Id);
+            card.Front = card.Front.Trim();
+            card.Back = card.Back.Trim();
+            card.Example = card.Example?.Trim() ?? string.Empty;
+            card.Prompt = card.Prompt?.Trim() ?? string.Empty;
+            card.Answer = card.Answer?.Trim() ?? string.Empty;
+            card.Notes = card.Notes?.Trim() ?? string.Empty;
+        }
+    }
+
+    private static bool HasPackageAccess(LearningPackage package, string planName) =>
+        package.RequiredPlans.Count == 0
+        || package.RequiredPlans.Any(plan => plan.Equals(planName, StringComparison.OrdinalIgnoreCase) || NormalizePlanId(plan) == NormalizePlanId(planName));
+
+    private static string CardSignature(FlashCard card) => $"{card.Type}:{NormalizeText(card.Front)}";
+    private static string NormalizeText(string value) => new((value ?? string.Empty).Trim().ToLowerInvariant().Where(ch => !char.IsWhiteSpace(ch)).ToArray());
+    private static string Slug(string value) => NormalizePlanId(value);
 
     private static async Task<HashSet<Guid>> GetCardIdsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string userId)
     {
@@ -1106,7 +1312,10 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         CorrectReviews = reader.GetInt32(10),
         CreatedAt = reader.GetFieldValue<DateTimeOffset>(11),
         NextReviewAt = reader.GetFieldValue<DateTimeOffset>(12),
-        LastReviewedAt = reader.IsDBNull(13) ? null : reader.GetFieldValue<DateTimeOffset>(13)
+        LastReviewedAt = reader.IsDBNull(13) ? null : reader.GetFieldValue<DateTimeOffset>(13),
+        IsArchived = reader.GetBoolean(14),
+        SourcePackageId = reader.GetString(15),
+        SourcePackageCardId = reader.GetString(16)
     };
 
     private static AccessCode ReadAccessCode(NpgsqlDataReader reader) => new()
@@ -1155,6 +1364,9 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         command.Parameters.AddWithValue("created_at", card.CreatedAt);
         command.Parameters.AddWithValue("next_review_at", card.NextReviewAt);
         command.Parameters.Add("last_reviewed_at", NpgsqlDbType.TimestampTz).Value = (object?)card.LastReviewedAt ?? DBNull.Value;
+        command.Parameters.AddWithValue("is_archived", card.IsArchived);
+        command.Parameters.AddWithValue("source_package_id", card.SourcePackageId ?? string.Empty);
+        command.Parameters.AddWithValue("source_package_card_id", card.SourcePackageCardId ?? string.Empty);
     }
 
     private static void AddAccessCodeParameters(NpgsqlCommand command, AccessCode code)

@@ -169,8 +169,14 @@
     </section>
 
     <section class="view" id="deckView">
+      <div class="segmented compact deck-mode-selector" id="deckModeSelector">
+        <label><input type="radio" name="deckMode" value="active" checked><span>فعال</span></label>
+        <label><input type="radio" name="deckMode" value="archived"><span>آرشیو</span></label>
+        <label><input type="radio" name="deckMode" value="packages"><span>بسته‌ها</span></label>
+      </div>
       <div class="boxes" id="boxes"></div>
       <div class="deck-list" id="deckList"></div>
+      <div class="packages-list" id="packagesList" hidden></div>
     </section>
 
     <section class="view" id="dictionaryView">

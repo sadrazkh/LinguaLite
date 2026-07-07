@@ -145,6 +145,7 @@ api.MapGet("/cards/due", async (HttpContext http, IConfiguration config, IAppSto
 
     var now = DateTimeOffset.UtcNow;
     var cards = (await store.GetDeckAsync(profile.Id)).Cards
+        .Where(card => !card.IsArchived)
         .Where(card => card.NextReviewAt <= now)
         .OrderBy(card => card.NextReviewAt)
         .ThenBy(card => card.Box)
@@ -154,13 +155,16 @@ api.MapGet("/cards/due", async (HttpContext http, IConfiguration config, IAppSto
     return Results.Ok(cards.Select(FeedbackCardPresenter.ToReviewShape));
 });
 
-api.MapGet("/cards", async (HttpContext http, IConfiguration config, IAppStore store) =>
+api.MapGet("/cards", async (HttpContext http, IConfiguration config, IAppStore store, bool archived = false) =>
 {
     var profile = await RequireUserAsync(http, config, store);
     if (profile is null) return Results.Unauthorized();
 
     var deck = await store.GetDeckAsync(profile.Id);
-    return Results.Ok(deck.Cards.OrderByDescending(card => card.CreatedAt).Select(FeedbackCardPresenter.ToReviewShape));
+    return Results.Ok(deck.Cards
+        .Where(card => card.IsArchived == archived)
+        .OrderByDescending(card => card.CreatedAt)
+        .Select(FeedbackCardPresenter.ToReviewShape));
 });
 
 api.MapPost("/cards", async (HttpContext http, IConfiguration config, CreateCardRequest request, IAppStore store) =>
@@ -176,7 +180,7 @@ api.MapPost("/cards", async (HttpContext http, IConfiguration config, CreateCard
     }
 
     var plan = await store.GetEffectivePlanAsync(profile.Plan);
-    if (!profile.Features.UnlimitedCards && plan.CardLimit > -1 && (await store.GetDeckAsync(profile.Id)).Cards.Count >= plan.CardLimit)
+    if (!profile.Features.UnlimitedCards && plan.CardLimit > -1 && (await store.GetDeckAsync(profile.Id)).Cards.Count(card => !card.IsArchived) >= plan.CardLimit)
     {
         return Results.BadRequest(new { message = "سقف تعداد کارت‌های این پلن پر شده است." });
     }
@@ -275,6 +279,22 @@ api.MapPost("/cards/{id:guid}/review", async (
     return Results.Ok(card);
 });
 
+api.MapPost("/cards/{id:guid}/archive", async (
+    HttpContext http,
+    IConfiguration config,
+    Guid id,
+    ArchiveCardRequest request,
+    IAppStore store) =>
+{
+    var profile = await RequireUserAsync(http, config, store);
+    if (profile is null) return Results.Unauthorized();
+
+    var card = await store.UpdateCardAsync(profile.Id, id, item => item.IsArchived = request.Archived);
+    return card is null
+        ? Results.NotFound(new { message = "کارت پیدا نشد." })
+        : Results.Ok(FeedbackCardPresenter.ToReviewShape(card));
+});
+
 api.MapDelete("/cards/{id:guid}", async (HttpContext http, IConfiguration config, Guid id, IAppStore store) =>
 {
     var profile = await RequireUserAsync(http, config, store);
@@ -310,6 +330,26 @@ api.MapPost("/import", async (HttpContext http, IConfiguration config, ImportReq
     var count = await store.ImportCardsAsync(profile.Id, request.Cards, request.Mode);
     await store.RecordActivityAsync(profile.Id, ActivityKind.CardAdded, count);
     return Results.Ok(new { imported = count });
+});
+
+api.MapGet("/packages", async (HttpContext http, IConfiguration config, IAppStore store) =>
+{
+    var profile = await RequireUserAsync(http, config, store);
+    if (profile is null) return Results.Unauthorized();
+
+    var packages = (await store.GetPackagesAsync()).Where(package => package.IsPublished).ToList();
+    var deck = await store.GetDeckAsync(profile.Id);
+    return Results.Ok(packages.Select(package => PackageSummary(package, deck, profile.Plan)));
+});
+
+api.MapPost("/packages/{id}/import", async (HttpContext http, IConfiguration config, string id, PackageImportRequest request, IAppStore store) =>
+{
+    var profile = await RequireUserAsync(http, config, store);
+    if (profile is null) return Results.Unauthorized();
+
+    var result = await store.ImportPackageCardsAsync(profile.Id, profile.Plan, id, request.Count);
+    if (result.Added > 0) await store.RecordActivityAsync(profile.Id, ActivityKind.CardAdded, result.Added);
+    return Results.Ok(result);
 });
 
 api.MapPost("/access/redeem", async (HttpContext http, IConfiguration config, RedeemCodeRequest request, IAppStore store) =>
@@ -555,6 +595,26 @@ admin.MapDelete("/plans/{id}", async (HttpContext http, IConfiguration config, s
     return await store.DeletePlanAsync(id) ? Results.NoContent() : Results.BadRequest(new { message = "پلن پیش‌فرض یا پلن ناموجود حذف نشد." });
 });
 
+admin.MapGet("/packages", async (HttpContext http, IConfiguration config, IAppStore store) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    return Results.Ok(await store.GetPackagesAsync());
+});
+
+admin.MapPut("/packages/{id}", async (HttpContext http, IConfiguration config, string id, UpsertPackageRequest request, IAppStore store) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    return Results.Ok(await store.UpsertPackageAsync(PackageFromRequest(id, request)));
+});
+
+admin.MapDelete("/packages/{id}", async (HttpContext http, IConfiguration config, string id, IAppStore store) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    return await store.DeletePackageAsync(id)
+        ? Results.NoContent()
+        : Results.NotFound(new { message = "بسته پیدا نشد." });
+});
+
 admin.MapGet("/settings", async (HttpContext http, IConfiguration config, IAppStore store) =>
 {
     if (!IsAdmin(http, config)) return Results.Unauthorized();
@@ -746,6 +806,76 @@ static IEnumerable<UserProfile> ApplyBroadcastFilter(IEnumerable<UserProfile> us
     }
 
     return query.OrderByDescending(user => user.LastSeenAt);
+}
+
+static object PackageSummary(LearningPackage package, DeckState deck, string planName)
+{
+    var existingPackageCards = deck.Cards
+        .Where(card => card.SourcePackageId.Equals(package.Id, StringComparison.OrdinalIgnoreCase))
+        .Select(card => card.SourcePackageCardId)
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var existingSignatures = deck.Cards.Select(FlashCardSignature).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    var available = package.Cards.Count(card =>
+        !existingPackageCards.Contains(card.Id)
+        && !existingSignatures.Contains(PackageCardSignature(card)));
+    var hasAccess = HasPackageAccess(package, planName);
+
+    return new
+    {
+        package.Id,
+        package.Title,
+        package.Description,
+        package.RequiredPlans,
+        package.IsPublished,
+        package.SortOrder,
+        TotalCards = package.Cards.Count,
+        AddedCards = package.Cards.Count - package.Cards.Count(card => !existingPackageCards.Contains(card.Id)),
+        AvailableCards = Math.Max(0, available),
+        HasAccess = hasAccess,
+        AccessMessage = hasAccess ? string.Empty : "پلن شما به این بسته دسترسی ندارد."
+    };
+}
+
+static LearningPackage PackageFromRequest(string id, UpsertPackageRequest request)
+{
+    var now = DateTimeOffset.UtcNow;
+    return new LearningPackage
+    {
+        Id = string.IsNullOrWhiteSpace(request.Id) ? id : request.Id,
+        Title = request.Title.Trim(),
+        Description = request.Description?.Trim() ?? string.Empty,
+        RequiredPlans = request.RequiredPlans ?? [],
+        IsPublished = request.IsPublished,
+        SortOrder = request.SortOrder,
+        CreatedAt = now,
+        UpdatedAt = now,
+        Cards = request.Cards.Select(card => new PackageCard
+        {
+            Id = card.Id,
+            Front = card.Front,
+            Back = card.Back,
+            Example = card.Example ?? string.Empty,
+            Prompt = card.Prompt ?? string.Empty,
+            Answer = card.Answer ?? string.Empty,
+            Notes = card.Notes ?? string.Empty,
+            Type = card.Type
+        }).ToList()
+    };
+}
+
+static bool HasPackageAccess(LearningPackage package, string planName) =>
+    package.RequiredPlans.Count == 0
+    || package.RequiredPlans.Any(plan => plan.Equals(planName, StringComparison.OrdinalIgnoreCase) || NormalizePlanId(plan) == NormalizePlanId(planName));
+
+static string PackageCardSignature(PackageCard card) => $"{card.Type}:{NormalizeText(card.Front)}";
+static string FlashCardSignature(FlashCard card) => $"{card.Type}:{NormalizeText(card.Front)}";
+static string NormalizeText(string value) => new((value ?? string.Empty).Trim().ToLowerInvariant().Where(ch => !char.IsWhiteSpace(ch)).ToArray());
+static string NormalizePlanId(string value)
+{
+    var normalized = new string((value ?? string.Empty).Trim().ToLowerInvariant()
+        .Select(ch => char.IsLetterOrDigit(ch) ? ch : '-')
+        .ToArray()).Trim('-');
+    return string.IsNullOrWhiteSpace(normalized) ? "free" : normalized;
 }
 
 static string? ResolveOpenRouterApiKey(HttpContext http, IConfiguration config)

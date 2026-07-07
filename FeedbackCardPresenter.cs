@@ -66,6 +66,9 @@ public static partial class FeedbackCardPresenter
             card.CreatedAt,
             card.NextReviewAt,
             card.LastReviewedAt,
+            card.IsArchived,
+            card.SourcePackageId,
+            card.SourcePackageCardId,
             Feedback = new { wrong, correct }
         };
     }

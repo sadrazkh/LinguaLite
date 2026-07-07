@@ -762,6 +762,10 @@ body.auth-required .view {
   margin-bottom: 12px;
 }
 
+.deck-mode-selector {
+  margin-bottom: 12px;
+}
+
 .box-pill {
   min-height: 58px;
   border-radius: 13px;
@@ -846,6 +850,84 @@ body.auth-required .view {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
+}
+
+.packages-list {
+  display: grid;
+  gap: 12px;
+}
+
+.package-card {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  border-radius: 14px;
+  padding: 14px;
+  display: grid;
+  gap: 11px;
+}
+
+.package-card.locked {
+  opacity: 0.68;
+  background: color-mix(in srgb, var(--surface), var(--surface-2) 45%);
+}
+
+.package-head,
+.package-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.package-head strong,
+.package-head small {
+  display: block;
+}
+
+.package-head small,
+.package-card > small {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.package-head > span {
+  min-width: 74px;
+  text-align: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-weight: 900;
+  color: var(--primary);
+  background: var(--surface-2);
+}
+
+.package-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.8;
+}
+
+.package-progress {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.package-progress i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary);
+}
+
+.package-actions input {
+  max-width: 112px;
+}
+
+.danger-text {
+  color: var(--danger) !important;
 }
 
 .tool-result {

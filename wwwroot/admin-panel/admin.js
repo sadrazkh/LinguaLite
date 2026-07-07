@@ -25,6 +25,17 @@ const elements = {
   newPlanNameInput: $("#newPlanNameInput"),
   addPlanButton: $("#addPlanButton"),
   plansBoard: $("#plansBoard"),
+  packageForm: $("#packageForm"),
+  packageIdInput: $("#packageIdInput"),
+  packageTitleInput: $("#packageTitleInput"),
+  packagePlansInput: $("#packagePlansInput"),
+  packageSortInput: $("#packageSortInput"),
+  packagePublishedInput: $("#packagePublishedInput"),
+  packageDescriptionInput: $("#packageDescriptionInput"),
+  packageCardsInput: $("#packageCardsInput"),
+  savePackageButton: $("#savePackageButton"),
+  newPackageButton: $("#newPackageButton"),
+  packagesList: $("#packagesList"),
   usersList: $("#usersList"),
   usersPagination: $("#usersPagination"),
   prevUsersPageButton: $("#prevUsersPageButton"),
@@ -52,7 +63,7 @@ const elements = {
   toast: $("#toast")
 };
 
-let state = { users: [], metrics: [], plans: [], codes: [], codeUsage: [], settings: null, draggingPlanId: null, usersPage: 1, usersPageSize: 10 };
+let state = { users: [], metrics: [], plans: [], packages: [], codes: [], codeUsage: [], settings: null, draggingPlanId: null, usersPage: 1, usersPageSize: 10 };
 const selectedBroadcastUserIds = new Set();
 
 elements.loginForm.addEventListener("submit", adminLogin);
@@ -61,6 +72,8 @@ elements.settingsForm.addEventListener("submit", saveSettings);
 elements.setWebhookButton.addEventListener("click", setWebhook);
 elements.botStatusButton.addEventListener("click", loadBotStatus);
 elements.addPlanButton.addEventListener("click", addPlan);
+elements.packageForm.addEventListener("submit", savePackage);
+elements.newPackageButton.addEventListener("click", resetPackageForm);
 elements.createCodeButton.addEventListener("click", createCode);
 elements.prevUsersPageButton.addEventListener("click", () => changeUsersPage(-1));
 elements.nextUsersPageButton.addEventListener("click", () => changeUsersPage(1));
@@ -91,15 +104,16 @@ async function adminLogin(event) {
 
 async function loadAll() {
   setStatus("در حال بارگذاری...", "");
-  const [users, metrics, codes, codeUsage, plans, settingsPayload] = await Promise.all([
+  const [users, metrics, codes, codeUsage, plans, packages, settingsPayload] = await Promise.all([
     adminFetch("/api/admin/users"),
     adminFetch("/api/admin/user-metrics"),
     adminFetch("/api/admin/codes"),
     adminFetch("/api/admin/codes/usage"),
     adminFetch("/api/admin/plans"),
+    adminFetch("/api/admin/packages"),
     adminFetch("/api/admin/settings")
   ]);
-  state = { ...state, users, metrics, codes, codeUsage, plans, settings: settingsPayload.settings };
+  state = { ...state, users, metrics, codes, codeUsage, plans, packages, settings: settingsPayload.settings };
   state.usersPage = Math.min(state.usersPage, getUsersPageCount());
   elements.dashboard.hidden = false;
   elements.logoutButton.hidden = false;
@@ -107,6 +121,7 @@ async function loadAll() {
   renderStats();
   renderSettings(settingsPayload);
   renderPlans();
+  renderPackages();
   renderUsers();
   renderCodes();
   renderBroadcastPreview();
@@ -187,6 +202,30 @@ function renderPlans() {
     card.addEventListener("drop", () => reorderPlans(state.draggingPlanId, card.dataset.planId));
     card.querySelector('[data-action="save"]').addEventListener("click", () => savePlan(card));
     card.querySelector('[data-action="delete"]').addEventListener("click", () => deletePlan(card.dataset.planId));
+  });
+}
+
+function renderPackages() {
+  elements.packagesList.innerHTML = state.packages.map(item => {
+    const plans = arrayOf(item.requiredPlans).length ? arrayOf(item.requiredPlans).join("، ") : "همه پلن‌ها";
+    return `
+      <article class="admin-item package-admin-item" data-package-id="${escapeHtml(item.id)}">
+        <div>
+          <strong>${escapeHtml(item.title || item.id)}</strong>
+          <small>${escapeHtml(item.id)} · ${toPersianNumber(item.cards?.length || 0)} کارت · ${escapeHtml(plans)} · ${item.isPublished ? "منتشر شده" : "پیش‌نویس"}</small>
+          <small class="mixed">${escapeHtml(item.description || "")}</small>
+        </div>
+        <div class="user-controls">
+          <button class="mini-button" type="button" data-action="edit-package">ویرایش</button>
+          <button class="mini-button danger" type="button" data-action="delete-package">حذف</button>
+        </div>
+      </article>
+    `;
+  }).join("") || `<div class="empty-state"><strong>بسته‌ای وجود ندارد.</strong></div>`;
+
+  elements.packagesList.querySelectorAll(".package-admin-item").forEach(item => {
+    item.querySelector('[data-action="edit-package"]').addEventListener("click", () => editPackage(item.dataset.packageId));
+    item.querySelector('[data-action="delete-package"]').addEventListener("click", () => deletePackage(item.dataset.packageId));
   });
 }
 
@@ -523,6 +562,63 @@ async function deletePlan(id) {
   await loadAll();
 }
 
+function editPackage(id) {
+  const item = state.packages.find(packageItem => packageItem.id === id);
+  if (!item) return;
+  elements.packageIdInput.value = item.id || "";
+  elements.packageTitleInput.value = item.title || "";
+  elements.packagePlansInput.value = arrayOf(item.requiredPlans).join(", ");
+  elements.packageSortInput.value = item.sortOrder ?? 0;
+  elements.packagePublishedInput.checked = item.isPublished ?? true;
+  elements.packageDescriptionInput.value = item.description || "";
+  elements.packageCardsInput.value = JSON.stringify(arrayOf(item.cards), null, 2);
+  elements.packageTitleInput.focus();
+}
+
+function resetPackageForm() {
+  elements.packageForm.reset();
+  elements.packagePublishedInput.checked = true;
+  elements.packageSortInput.value = state.packages.length;
+  elements.packageCardsInput.value = "[]";
+}
+
+async function savePackage(event) {
+  event.preventDefault();
+  let cards;
+  try {
+    cards = JSON.parse(elements.packageCardsInput.value || "[]");
+    if (!Array.isArray(cards)) throw new Error("cards json must be array");
+  } catch {
+    return showToast("JSON کارت‌های بسته معتبر نیست.");
+  }
+
+  const title = elements.packageTitleInput.value.trim();
+  if (!title) return showToast("عنوان بسته را وارد کن.");
+  const id = elements.packageIdInput.value.trim() || slugify(title);
+  await adminFetch(`/api/admin/packages/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      id,
+      title,
+      description: elements.packageDescriptionInput.value.trim(),
+      requiredPlans: elements.packagePlansInput.value.split(",").map(item => item.trim()).filter(Boolean),
+      isPublished: elements.packagePublishedInput.checked,
+      sortOrder: Number(elements.packageSortInput.value || 0),
+      cards
+    })
+  });
+  showToast("بسته ذخیره شد.");
+  resetPackageForm();
+  await loadAll();
+}
+
+async function deletePackage(id) {
+  if (!confirm("این بسته حذف شود؟ کارت‌هایی که قبلا کاربران اضافه کرده‌اند حذف نمی‌شوند.")) return;
+  await adminFetch(`/api/admin/packages/${encodeURIComponent(id)}`, { method: "DELETE" });
+  showToast("بسته حذف شد.");
+  await loadAll();
+}
+
 async function reorderPlans(sourceId, targetId) {
   if (!sourceId || !targetId || sourceId === targetId) return;
   const plans = [...state.plans];
@@ -720,6 +816,10 @@ function parseTelegramBody(call) {
 
 function normalizeUrl(value) {
   return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function arrayOf(value) {
+  return Array.isArray(value) ? value : [];
 }
 
 function setButtonLoading(button, loading, text) {

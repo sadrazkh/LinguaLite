@@ -262,6 +262,55 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
             ?? PlanDefinition.Defaults()[0];
     }
 
+    public async Task<List<LearningPackage>> GetPackagesAsync()
+    {
+        return await MutateAsync(db =>
+        {
+            EnsurePackages(db);
+            return db.Packages.OrderBy(item => item.SortOrder).ThenBy(item => item.Title).ToList();
+        });
+    }
+
+    public async Task<LearningPackage> UpsertPackageAsync(LearningPackage package)
+    {
+        return await MutateAsync(db =>
+        {
+            EnsurePackages(db);
+            NormalizePackage(package);
+            var index = db.Packages.FindIndex(item => item.Id.Equals(package.Id, StringComparison.OrdinalIgnoreCase));
+            if (index >= 0) db.Packages[index] = package;
+            else db.Packages.Add(package);
+            return package;
+        });
+    }
+
+    public async Task<bool> DeletePackageAsync(string id)
+    {
+        return await MutateAsync(db =>
+        {
+            EnsurePackages(db);
+            return db.Packages.RemoveAll(item => item.Id.Equals(id, StringComparison.OrdinalIgnoreCase)) > 0;
+        });
+    }
+
+    public async Task<PackageImportResult> ImportPackageCardsAsync(string userId, string planName, string packageId, int count)
+    {
+        return await MutateAsync(db =>
+        {
+            EnsurePackages(db);
+            if (!db.Decks.TryGetValue(userId, out var deck))
+            {
+                deck = new DeckState();
+                db.Decks[userId] = deck;
+            }
+
+            var package = db.Packages.FirstOrDefault(item => item.Id.Equals(packageId, StringComparison.OrdinalIgnoreCase) && item.IsPublished);
+            if (package is null) return new PackageImportResult(packageId, count, 0, 0, 0, "بسته پیدا نشد.");
+            if (!HasPackageAccess(package, planName)) return new PackageImportResult(package.Id, count, 0, 0, count, "پلن شما به این بسته دسترسی ندارد.");
+            return ImportPackageIntoDeck(deck, package, count);
+        });
+    }
+
     public async Task<AiUsageSummary> GetAiUsageAsync(string userId, string planName, AiToolKind tool)
     {
         var plan = await GetEffectivePlanAsync(planName);
@@ -416,11 +465,12 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         {
             db.Decks.TryGetValue(userId, out var deck);
             var activity = db.UserActivity.FirstOrDefault(item => item.UserId == userId && item.ActivityDate == today);
-            var dueCards = deck?.Cards.Count(card => card.NextReviewAt <= DateTimeOffset.UtcNow) ?? 0;
+            var activeCards = deck?.Cards.Where(card => !card.IsArchived).ToList() ?? new List<FlashCard>();
+            var dueCards = activeCards.Count(card => card.NextReviewAt <= DateTimeOffset.UtcNow);
             return new AdminUserMetrics
             {
                 UserId = userId,
-                TotalCards = deck?.Cards.Count ?? 0,
+                TotalCards = activeCards.Count,
                 DueCards = dueCards,
                 RequestsToday = activity?.Requests ?? 0,
                 ActiveMinutesToday = ActiveMinutes(activity),
@@ -629,12 +679,84 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         return activity.Requests > 0 ? Math.Max(1, minutes) : Math.Max(0, minutes);
     }
 
+    private static void EnsurePackages(LocalAppDatabase db)
+    {
+        if (db.Packages.Count > 0) return;
+        db.Packages.AddRange(LearningPackage.Defaults());
+    }
+
+    private static void NormalizePackage(LearningPackage package)
+    {
+        package.Id = string.IsNullOrWhiteSpace(package.Id) ? Slug(package.Title) : Slug(package.Id);
+        package.Title = string.IsNullOrWhiteSpace(package.Title) ? package.Id : package.Title.Trim();
+        package.Description = package.Description?.Trim() ?? string.Empty;
+        package.RequiredPlans = package.RequiredPlans.Select(item => item.Trim()).Where(item => !string.IsNullOrWhiteSpace(item)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        package.CreatedAt = package.CreatedAt == default ? DateTimeOffset.UtcNow : package.CreatedAt;
+        package.UpdatedAt = DateTimeOffset.UtcNow;
+        foreach (var card in package.Cards)
+        {
+            card.Id = string.IsNullOrWhiteSpace(card.Id) ? Slug(card.Front) : Slug(card.Id);
+            card.Front = card.Front.Trim();
+            card.Back = card.Back.Trim();
+            card.Example = card.Example?.Trim() ?? string.Empty;
+            card.Prompt = card.Prompt?.Trim() ?? string.Empty;
+            card.Answer = card.Answer?.Trim() ?? string.Empty;
+            card.Notes = card.Notes?.Trim() ?? string.Empty;
+        }
+    }
+
+    private static PackageImportResult ImportPackageIntoDeck(DeckState deck, LearningPackage package, int requested)
+    {
+        var count = Math.Clamp(requested, 1, 100);
+        var existingPackageCards = deck.Cards
+            .Where(card => card.SourcePackageId.Equals(package.Id, StringComparison.OrdinalIgnoreCase))
+            .Select(card => card.SourcePackageCardId)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var existingSignatures = deck.Cards.Select(CardSignature).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var added = 0;
+        var skippedDuplicate = 0;
+
+        foreach (var item in package.Cards)
+        {
+            if (added >= count) break;
+            if (existingPackageCards.Contains(item.Id))
+            {
+                skippedDuplicate++;
+                continue;
+            }
+
+            var card = item.ToFlashCard(package.Id);
+            if (existingSignatures.Contains(CardSignature(card)))
+            {
+                skippedDuplicate++;
+                continue;
+            }
+
+            deck.Cards.Add(card);
+            existingPackageCards.Add(item.Id);
+            existingSignatures.Add(CardSignature(card));
+            added++;
+        }
+
+        return new PackageImportResult(package.Id, count, added, skippedDuplicate, 0,
+            added > 0 ? $"{added} کارت از بسته اضافه شد." : "کارت جدیدی برای اضافه کردن پیدا نشد.");
+    }
+
+    private static bool HasPackageAccess(LearningPackage package, string planName) =>
+        package.RequiredPlans.Count == 0
+        || package.RequiredPlans.Any(plan => plan.Equals(planName, StringComparison.OrdinalIgnoreCase) || NormalizePlanId(plan) == NormalizePlanId(planName));
+
+    private static string CardSignature(FlashCard card) => $"{card.Type}:{NormalizeText(card.Front)}";
+    private static string NormalizeText(string value) => new(value.Trim().ToLowerInvariant().Where(ch => !char.IsWhiteSpace(ch)).ToArray());
+    private static string Slug(string value) => NormalizePlanId(value);
+
     private sealed class LocalAppDatabase
     {
         public Dictionary<string, UserProfile> Users { get; set; } = [];
         public Dictionary<string, DeckState> Decks { get; set; } = [];
         public Dictionary<string, AccessCode> AccessCodes { get; set; } = [];
         public List<PlanDefinition> Plans { get; set; } = [];
+        public List<LearningPackage> Packages { get; set; } = [];
         public List<LocalAiUsage> AiUsage { get; set; } = [];
         public List<BrowserLoginCode> BrowserLoginCodes { get; set; } = [];
         public List<LocalBrowserSession> BrowserSessions { get; set; } = [];
