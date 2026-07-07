@@ -6,7 +6,8 @@ const storage = {
   apiKey: "lingualite.openrouterApiKey",
   devUserId: "lingualite.devUserId",
   sessionToken: "lingualite.sessionToken",
-  theme: "lingualite.theme"
+  theme: "lingualite.theme",
+  reviewExampleHint: "lingualite.reviewExampleHint"
 };
 
 const devUserId = getOrCreateDevUserId();
@@ -16,6 +17,7 @@ const state = {
   archivedCards: [],
   packages: [],
   deckMode: "active",
+  selectedBoxes: new Set(),
   current: null,
   config: null,
   editingCardId: null,
@@ -52,6 +54,7 @@ const elements = {
   openBotButton: $("#openBotButton"),
   browserLoginForm: $("#browserLoginForm"),
   browserLoginCodeInput: $("#browserLoginCodeInput"),
+  browserLoginOtp: $("#browserLoginOtp"),
   browserLoginButton: $("#browserLoginButton"),
   authHelpText: $("#authHelpText"),
   form: $("#cardForm"),
@@ -87,6 +90,7 @@ const elements = {
   dailyReportText: $("#dailyReportText"),
   usageGrid: $("#usageGrid"),
   languageLevelInput: $("#languageLevelInput"),
+  reviewExampleHintInput: $("#reviewExampleHintInput"),
   savePreferencesButton: $("#savePreferencesButton"),
   checkUpdateButton: $("#checkUpdateButton"),
   themeSelector: $("#themeSelector"),
@@ -172,6 +176,43 @@ const typeCopy = {
   }
 };
 
+typeCopy.Word.aiPlaceholder = "include";
+typeCopy.Word.placeholders = [
+  "include",
+  "شامل بودن، دربرگرفتن",
+  "The price includes breakfast and Wi-Fi.",
+  "What does include mean in this sentence?",
+  "شامل بودن",
+  "Common pattern: include + noun/object."
+];
+typeCopy.Sentence.aiPlaceholder = "I usually work from home on Mondays.";
+typeCopy.Sentence.placeholders = [
+  "I usually work from home on Mondays.",
+  "من معمولا دوشنبه‌ها از خانه کار می‌کنم.",
+  "She rarely checks her email at night.",
+  "Rewrite this sentence in the past tense.",
+  "I usually worked from home on Mondays.",
+  "Use frequency adverbs before the main verb."
+];
+typeCopy.Question.aiPlaceholder = "How can I politely ask for more time?";
+typeCopy.Question.placeholders = [
+  "Could I have a little more time?",
+  "درخواست مودبانه برای زمان بیشتر.",
+  "A: Could I have a little more time? B: Sure, no problem.",
+  "Ask your manager for more time politely.",
+  "Could I have a little more time, please?",
+  "Could I...? is softer than Can I...?"
+];
+typeCopy.Feedback.aiPlaceholder = "I programmer / Teacher: I am a programmer.";
+typeCopy.Feedback.placeholders = [
+  "I programmer / Teacher: I am a programmer.",
+  "توضیح استاد یا نکته‌ای که یادت مانده.",
+  "I am a programmer.",
+  "Correct this sentence: I programmer.",
+  "I am a programmer.",
+  "Pattern: I am a/an + job."
+];
+
 applyTelegramTheme();
 bindEvents();
 loadSettings();
@@ -189,6 +230,10 @@ function bindEvents() {
   });
 
   elements.revealButton.addEventListener("click", revealCurrentCard);
+  elements.exampleText.addEventListener("click", revealExampleHint);
+  elements.exampleText.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") revealExampleHint();
+  });
   elements.rememberedButton.addEventListener("click", () => reviewCurrent(true));
   elements.forgotButton.addEventListener("click", () => reviewCurrent(false));
   elements.refreshButton.addEventListener("click", refreshApp);
@@ -199,6 +244,7 @@ function bindEvents() {
     });
   });
   elements.browserLoginForm.addEventListener("submit", browserLogin);
+  setupOtpInputs();
   elements.form.addEventListener("submit", saveCard);
   elements.cancelEditButton.addEventListener("click", resetCardForm);
   elements.completeAiButton.addEventListener("click", completeWithAi);
@@ -207,6 +253,9 @@ function bindEvents() {
   elements.apiKeyForm.addEventListener("submit", saveSettings);
   elements.activationForm.addEventListener("submit", redeemCode);
   elements.savePreferencesButton.addEventListener("click", savePreferences);
+  elements.reviewExampleHintInput.addEventListener("change", () => {
+    localStorage.setItem(storage.reviewExampleHint, elements.reviewExampleHintInput.checked ? "on" : "off");
+  });
   elements.checkUpdateButton.addEventListener("click", checkForAppUpdate);
   document.querySelectorAll('input[name="theme"]').forEach((radio) => {
     radio.addEventListener("change", () => setThemeMode(radio.value));
@@ -313,6 +362,7 @@ async function showAuthGate() {
 async function browserLogin(event) {
   event.preventDefault();
   const code = elements.browserLoginCodeInput.value.trim();
+  if (!/^\d{6}$/.test(code)) return showToast("کد ورود باید ۶ رقم باشد.");
   if (!code) return showToast("کد ورود را وارد کن.");
 
   setButtonLoading(elements.browserLoginButton, true, "در حال اتصال...");
@@ -323,7 +373,7 @@ async function browserLogin(event) {
       body: JSON.stringify({ code })
     });
     localStorage.setItem(storage.sessionToken, result.sessionToken);
-    elements.browserLoginCodeInput.value = "";
+    clearOtp();
     showToast("اکانت تلگرام وصل شد.");
     await loadAll();
   } catch (error) {
@@ -331,6 +381,55 @@ async function browserLogin(event) {
   } finally {
     setButtonLoading(elements.browserLoginButton, false, "اتصال اکانت");
   }
+}
+
+function setupOtpInputs() {
+  const inputs = getOtpInputs();
+  inputs.forEach((input, index) => {
+    input.addEventListener("input", () => {
+      const digits = input.value.replace(/\D/g, "");
+      if (digits.length > 1) {
+        fillOtp(digits);
+        return;
+      }
+      input.value = digits;
+      syncOtpValue();
+      if (digits && inputs[index + 1]) inputs[index + 1].focus();
+    });
+
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Backspace" && !input.value && inputs[index - 1]) {
+        inputs[index - 1].focus();
+      }
+    });
+
+    input.addEventListener("paste", (event) => {
+      event.preventDefault();
+      fillOtp(event.clipboardData?.getData("text") || "");
+    });
+  });
+}
+
+function getOtpInputs() {
+  return Array.from(elements.browserLoginOtp?.querySelectorAll("input") || []);
+}
+
+function fillOtp(value) {
+  const digits = value.replace(/\D/g, "").slice(0, 6);
+  const inputs = getOtpInputs();
+  inputs.forEach((input, index) => input.value = digits[index] || "");
+  syncOtpValue();
+  const next = inputs[Math.min(digits.length, inputs.length - 1)];
+  next?.focus();
+}
+
+function syncOtpValue() {
+  elements.browserLoginCodeInput.value = getOtpInputs().map(input => input.value).join("");
+}
+
+function clearOtp() {
+  fillOtp("");
+  getOtpInputs()[0]?.focus();
 }
 
 function renderProfile(config) {
@@ -444,10 +543,26 @@ function pickNextCard() {
   elements.frontCaption.textContent = isFeedback ? "تمرین اصلاح" : "روی کارت";
   elements.backCaption.textContent = isFeedback ? "دلیل و الگو" : "پشت کارت";
   elements.frontText.textContent = card.front;
-  elements.exampleText.textContent = "";
+  renderExampleHint(card);
   elements.backText.textContent = card.back;
   elements.qaText.textContent = [card.prompt, card.answer, card.notes].filter(Boolean).join(" · ");
   setBoxProgress(card.box);
+}
+
+function renderExampleHint(card) {
+  const enabled = elements.reviewExampleHintInput?.checked ?? localStorage.getItem(storage.reviewExampleHint) !== "off";
+  const example = card.example?.trim() || "";
+  elements.exampleText.hidden = !enabled || !example;
+  elements.exampleText.textContent = example ? `Example: ${example}` : "";
+  elements.exampleText.classList.toggle("blurred", Boolean(enabled && example));
+  elements.exampleText.setAttribute("role", enabled && example ? "button" : "");
+  elements.exampleText.setAttribute("tabindex", enabled && example ? "0" : "-1");
+  elements.exampleText.title = enabled && example ? "برای دیدن مثال لمس کن" : "";
+}
+
+function revealExampleHint() {
+  if (elements.exampleText.hidden) return;
+  elements.exampleText.classList.remove("blurred");
 }
 
 function revealCurrentCard() {
@@ -713,6 +828,10 @@ function resetCardForm() {
 
 function loadSettings() {
   elements.apiKeyInput.value = localStorage.getItem(storage.apiKey) || "";
+  elements.reviewExampleHintInput.checked = localStorage.getItem(storage.reviewExampleHint) !== "off";
+  elements.aiWordInput.placeholder = "include";
+  elements.dictionaryInput.placeholder = "include";
+  elements.correctionInput.placeholder = "I am interested in improving my speaking skills.";
 }
 
 function saveSettings(event) {
@@ -743,6 +862,7 @@ async function redeemCode(event) {
 
 async function savePreferences() {
   try {
+    localStorage.setItem(storage.reviewExampleHint, elements.reviewExampleHintInput.checked ? "on" : "off");
     await fetchJson("/api/profile/preferences", {
       method: "PUT",
       body: JSON.stringify({ languageLevel: elements.languageLevelInput.value })
@@ -801,11 +921,29 @@ function renderBoxes(boxes) {
   elements.boxes.innerHTML = "";
   for (let box = 1; box <= 5; box += 1) {
     const count = boxes[box] ?? boxes[String(box)] ?? 0;
-    const node = document.createElement("div");
+    const node = document.createElement("button");
+    node.type = "button";
     node.className = "box-pill";
+    node.classList.toggle("selected", state.selectedBoxes.has(box));
+    node.dataset.box = String(box);
     node.innerHTML = `<span>${toPersianNumber(count)}</span><small>جعبه ${toPersianNumber(box)}</small>`;
+    node.addEventListener("click", () => toggleBoxFilter(box));
     elements.boxes.appendChild(node);
   }
+}
+
+function toggleBoxFilter(box) {
+  if (state.selectedBoxes.has(box)) state.selectedBoxes.delete(box);
+  else state.selectedBoxes.add(box);
+  renderBoxes(currentBoxesSummary());
+  renderDeckSection();
+}
+
+function currentBoxesSummary() {
+  return state.cards.reduce((summary, card) => {
+    summary[card.box] = (summary[card.box] || 0) + 1;
+    return summary;
+  }, {});
 }
 
 function renderDeck(cards) {
@@ -845,7 +983,11 @@ function renderDeckSection() {
     return;
   }
 
-  renderDeck(state.deckMode === "archived" ? state.archivedCards : state.cards, state.deckMode === "archived");
+  const source = state.deckMode === "archived" ? state.archivedCards : state.cards;
+  const filtered = state.selectedBoxes.size === 0 || state.deckMode === "archived"
+    ? source
+    : source.filter(card => state.selectedBoxes.has(Number(card.box)));
+  renderDeck(filtered, state.deckMode === "archived");
 }
 
 function renderDeck(cards, archived = false) {

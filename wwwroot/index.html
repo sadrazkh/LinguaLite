@@ -42,7 +42,15 @@
         <form id="browserLoginForm" class="browser-login-form">
           <label>
             <span>کد ورود یک‌بارمصرف</span>
-            <input class="mixed-input" id="browserLoginCodeInput" autocomplete="one-time-code" inputmode="numeric" placeholder="123456">
+            <input class="mixed-input sr-only" id="browserLoginCodeInput" autocomplete="one-time-code" inputmode="numeric" maxlength="6">
+            <div class="otp-inputs" id="browserLoginOtp" dir="ltr" aria-label="کد ورود شش رقمی">
+              <input inputmode="numeric" autocomplete="one-time-code" maxlength="1" aria-label="رقم ۱">
+              <input inputmode="numeric" maxlength="1" aria-label="رقم ۲">
+              <input inputmode="numeric" maxlength="1" aria-label="رقم ۳">
+              <input inputmode="numeric" maxlength="1" aria-label="رقم ۴">
+              <input inputmode="numeric" maxlength="1" aria-label="رقم ۵">
+              <input inputmode="numeric" maxlength="1" aria-label="رقم ۶">
+            </div>
           </label>
           <button class="secondary-button" id="browserLoginButton" type="submit">اتصال اکانت</button>
         </form>
@@ -254,6 +262,10 @@
             <option value="C1">C1 - پیشرفته</option>
             <option value="C2">C2 - مسلط</option>
           </select>
+        </label>
+        <label class="check-row settings-check">
+          <input id="reviewExampleHintInput" type="checkbox">
+          <span>نمایش مثال انگلیسی به صورت محو هنگام مرور</span>
         </label>
         <div class="tool-row">
           <button class="primary-button" id="savePreferencesButton" type="button">ذخیره تنظیمات</button>

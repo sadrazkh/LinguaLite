@@ -187,16 +187,17 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
     private async Task SendStatusAsync(UserProfile profile, long chatId, AppSettingsState settings)
     {
         var deck = await store.GetDeckAsync(profile.Id);
-        var due = deck.Cards.Count(card => card.NextReviewAt <= DateTimeOffset.UtcNow);
+        var activeCards = deck.Cards.Where(card => !card.IsArchived).ToList();
+        var due = activeCards.Count(card => card.NextReviewAt <= DateTimeOffset.UtcNow);
         await SendMessageAsync(chatId,
-            $"وضعیت اکانت:\nپلن: {profile.Plan}\nکارت‌ها: {deck.Cards.Count}\nآماده مرور: {due}\nیادآوری: {(profile.RemindersEnabled ? "روشن" : "خاموش")}",
+            $"وضعیت اکانت:\nپلن: {profile.Plan}\nکارت‌ها: {activeCards.Count}\nآماده مرور: {due}\nیادآوری: {(profile.RemindersEnabled ? "روشن" : "خاموش")}",
             settings);
     }
 
     private async Task SendDueAsync(UserProfile profile, long chatId, AppSettingsState settings)
     {
         var deck = await store.GetDeckAsync(profile.Id);
-        var dueCount = deck.Cards.Count(card => card.NextReviewAt <= DateTimeOffset.UtcNow);
+        var dueCount = deck.Cards.Count(card => !card.IsArchived && card.NextReviewAt <= DateTimeOffset.UtcNow);
         await SendMessageAsync(chatId,
             dueCount == 0 ? "فعلا کارت آماده مرور نداری." : $"امروز {dueCount} کارت برای مرور داری.",
             settings);
@@ -206,8 +207,9 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
     {
         var code = await store.CreateBrowserLoginCodeAsync(profile.Id, TimeSpan.FromMinutes(10));
         await SendMessageAsync(chatId,
-            $"کد ورود به نسخه مرورگر/PWA:\n{code.Code}\nاین کد ۱۰ دقیقه اعتبار دارد و یک‌بارمصرف است.",
-            settings);
+            $"کد ورود به نسخه مرورگر/PWA:\n<code>{code.Code}</code>\nروی کد بزن تا فقط همان کد کپی شود. این کد ۱۰ دقیقه اعتبار دارد و یک‌بارمصرف است.",
+            settings,
+            "HTML");
     }
 
     private async Task RedeemCodeAsync(UserProfile profile, long chatId, string code, AppSettingsState settings)
@@ -276,7 +278,7 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
         await SendMessageAsync(chatId, "کارت فیدبک اضافه شد.", settings);
     }
 
-    private async Task SendMessageAsync(long chatId, string text, AppSettingsState settings)
+    private async Task SendMessageAsync(long chatId, string text, AppSettingsState settings, string? parseMode = null)
     {
         var token = configuration["TELEGRAM_BOT_TOKEN"];
         if (string.IsNullOrWhiteSpace(token)) return;
@@ -312,12 +314,11 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
             }
             : null;
 
-        using var response = await httpClient.PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage", new
-        {
-            chat_id = chatId,
-            text,
-            reply_markup = replyMarkup
-        });
+        object payload = string.IsNullOrWhiteSpace(parseMode)
+            ? new { chat_id = chatId, text, reply_markup = replyMarkup }
+            : new { chat_id = chatId, text, parse_mode = parseMode, reply_markup = replyMarkup };
+
+        using var response = await httpClient.PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage", payload);
 
         var body = await response.Content.ReadAsStringAsync();
 
@@ -326,11 +327,11 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
         {
             if (replyMarkup is not null)
             {
-                using var fallbackResponse = await httpClient.PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage", new
-                {
-                    chat_id = chatId,
-                    text
-                });
+                object fallbackPayload = string.IsNullOrWhiteSpace(parseMode)
+                    ? new { chat_id = chatId, text }
+                    : new { chat_id = chatId, text, parse_mode = parseMode };
+
+                using var fallbackResponse = await httpClient.PostAsJsonAsync($"https://api.telegram.org/bot{token}/sendMessage", fallbackPayload);
 
                 var fallbackBody = await fallbackResponse.Content.ReadAsStringAsync();
 

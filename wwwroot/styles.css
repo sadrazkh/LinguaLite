@@ -385,6 +385,28 @@ select:focus {
   line-height: 1.75;
 }
 
+.example[hidden] {
+  display: none;
+}
+
+.example.blurred {
+  cursor: pointer;
+  user-select: none;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface), var(--surface-2) 45%);
+  color: var(--text);
+  filter: blur(4px);
+  transition: filter 160ms ease, border-color 160ms ease;
+}
+
+.example.blurred:hover,
+.example.blurred:focus {
+  filter: blur(2px);
+  border-color: var(--primary);
+}
+
 .primary-button,
 .secondary-button {
   min-height: 48px;
@@ -491,6 +513,33 @@ select:focus {
   color: var(--muted);
   font-size: 0.84rem;
   font-weight: 900;
+}
+
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+  padding: 0 !important;
+}
+
+.otp-inputs {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+
+.otp-inputs input {
+  height: 54px;
+  padding: 0;
+  text-align: center;
+  direction: ltr;
+  font-size: 1.35rem;
+  font-weight: 900;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
 .auth-note {
@@ -643,6 +692,26 @@ body.auth-required .view {
   font-weight: 900;
 }
 
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text);
+  font-weight: 900;
+}
+
+.check-row input {
+  width: auto;
+  accent-color: var(--primary);
+}
+
+.settings-check {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
 .segmented.compact {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -696,9 +765,11 @@ body.auth-required .view {
 }
 
 .segmented input {
-  width: auto;
-  margin: 0;
-  accent-color: var(--primary);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .segmented label:has(input:checked) {
@@ -767,6 +838,8 @@ body.auth-required .view {
 }
 
 .box-pill {
+  border: 1px solid var(--line);
+  color: var(--text);
   min-height: 58px;
   border-radius: 13px;
   display: grid;
@@ -774,9 +847,30 @@ body.auth-required .view {
   font-weight: 900;
 }
 
+.box-pill.selected {
+  background: #ffffff;
+  color: #111827;
+  border-color: #ffffff;
+  box-shadow: 0 12px 24px rgba(255, 255, 255, 0.12);
+}
+
 .box-pill small {
   color: var(--muted);
   font-size: 0.68rem;
+}
+
+.box-pill.selected small {
+  color: #4b5563;
+}
+
+#aiWordInput,
+#dictionaryInput,
+#correctionInput,
+#frontInput,
+#exampleInput,
+#promptInput {
+  direction: ltr;
+  text-align: left;
 }
 
 .deck-list {
