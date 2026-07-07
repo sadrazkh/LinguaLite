@@ -12,6 +12,7 @@ public sealed class UserProfile
     public string Plan { get; set; } = "Free";
     public FeatureSet Features { get; set; } = FeatureSet.AllEnabled();
     public string AccessCode { get; set; } = string.Empty;
+    public string LanguageLevel { get; set; } = "B1";
     public bool RemindersEnabled { get; set; } = true;
     public int? ReminderHour { get; set; }
     public DateTimeOffset? LastReminderAt { get; set; }
@@ -256,9 +257,9 @@ public sealed record UserIdentity(
 
 public sealed record TelegramUser(string Id, string Name, string Username);
 public sealed record CreateCardRequest(string Front, string Back, string? Example, string? Prompt, string? Answer, string? Notes, CardType Type = CardType.Word);
-public sealed record AiCompleteRequest(string Text, CardType? Type);
-public sealed record DictionaryRequest(string Text);
-public sealed record CorrectionRequest(string Text);
+public sealed record AiCompleteRequest(string Text, CardType? Type, string? LanguageLevel = null);
+public sealed record DictionaryRequest(string Text, string? LanguageLevel = null);
+public sealed record CorrectionRequest(string Text, string? LanguageLevel = null);
 public sealed record DictionaryResult(string Word, string Pronunciation, string PartOfSpeech, string PersianMeaning, string EnglishDefinition, string[] Synonyms, string[] Examples, string Notes);
 public sealed record CorrectionIssue(string Original, string Corrected, string Reason, string Severity);
 public sealed record CorrectionResult(string Original, string Corrected, string PersianTranslation, string OverallNote, CorrectionIssue[] Issues, string[] BetterAlternatives);
@@ -275,6 +276,17 @@ public sealed record BrowserLoginResult(bool Success, string Message, string Ses
 public sealed record AdminUpdateUserRequest(bool? IsActive, string? Plan, FeatureSet? Features, bool? RemindersEnabled, int? ReminderHour);
 public sealed record CreateAccessCodeRequest(string? Code, string? Plan, FeatureSet? Features, int? MaxUses);
 public sealed record UpdateAccessCodeRequest(string? Plan, FeatureSet? Features, int? MaxUses);
+public sealed record UpdateUserPreferencesRequest(string? LanguageLevel);
+public sealed record AdminBroadcastRequest(
+    string Message,
+    string Audience = "filtered",
+    List<string>? UserIds = null,
+    string? Plan = null,
+    bool? IsActive = null,
+    string? Source = null,
+    string? AccessCode = null,
+    string? Search = null);
+public sealed record AdminBroadcastResult(int Matched, int Sent, int Skipped, int Failed, List<string> Errors);
 public sealed record UpdateCardRequest(string Front, string Back, string? Example, string? Prompt, string? Answer, string? Notes, CardType Type = CardType.Word);
 public sealed record UpsertPlanRequest(string Id, string Name, string? BadgeColor, string? BadgeTextColor, FeatureSet Features, int AiDailyLimit, int AiMonthlyLimit, int DictionaryDailyLimit, int DictionaryMonthlyLimit, int CorrectionDailyLimit, int CorrectionMonthlyLimit, int CardLimit, int SortOrder, bool IsDefault);
 public sealed record UpdateSettingsRequest(string? OpenRouterModel, string? OpenRouterReferer, string? PublicBaseUrl, string? TelegramBotUsername, string? TelegramMiniAppUrl, bool? BotEnabled, bool? RemindersEnabled, int? ReminderHour);

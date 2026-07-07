@@ -108,6 +108,7 @@ api.MapGet("/config", async (HttpContext http, IConfiguration config, IAppStore 
         profile.DisplayName,
         profile.TelegramId,
         profile.TelegramUsername,
+        profile.LanguageLevel,
         profile.Plan,
         effectivePlan = plan,
         profile.IsActive,
@@ -320,6 +321,22 @@ api.MapPost("/access/redeem", async (HttpContext http, IConfiguration config, Re
     return result.Success ? Results.Ok(result.Profile) : Results.BadRequest(new { message = result.Message });
 });
 
+api.MapPut("/profile/preferences", async (HttpContext http, IConfiguration config, UpdateUserPreferencesRequest request, IAppStore store) =>
+{
+    var profile = await RequireUserAsync(http, config, store);
+    if (profile is null) return Results.Unauthorized();
+
+    var updated = await store.UpdateUserAsync(profile.Id, user =>
+    {
+        if (!string.IsNullOrWhiteSpace(request.LanguageLevel))
+        {
+            user.LanguageLevel = NormalizeLanguageLevel(request.LanguageLevel);
+        }
+    });
+
+    return updated is null ? Results.NotFound() : Results.Ok(updated);
+});
+
 api.MapPost("/ai/complete", async (AiCompleteRequest request, HttpContext http, IConfiguration config, IAppStore store, OpenRouterCardService ai) =>
 {
     var profile = await RequireUserAsync(http, config, store);
@@ -344,6 +361,7 @@ api.MapPost("/ai/complete", async (AiCompleteRequest request, HttpContext http, 
         return Results.Json(new { message = quota.Message, usage = quota }, statusCode: StatusCodes.Status429TooManyRequests);
     }
 
+    request = request with { LanguageLevel = profile.LanguageLevel };
     var card = NormalizeFeedbackRequest(await ai.CompleteAsync(request, apiKey));
     await store.RecordActivityAsync(profile.Id, ActivityKind.AiCard);
     return Results.Ok(card);
@@ -375,6 +393,7 @@ api.MapPost("/ai/dictionary", async (DictionaryRequest request, HttpContext http
         return Results.Json(new { message = quota.Message, usage = quota }, statusCode: StatusCodes.Status429TooManyRequests);
     }
 
+    request = request with { LanguageLevel = profile.LanguageLevel };
     var result = await ai.LookupDictionaryAsync(request, apiKey);
     await store.RecordActivityAsync(profile.Id, ActivityKind.AiDictionary);
     return Results.Ok(result);
@@ -406,6 +425,7 @@ api.MapPost("/ai/correction", async (CorrectionRequest request, HttpContext http
         return Results.Json(new { message = quota.Message, usage = quota }, statusCode: StatusCodes.Status429TooManyRequests);
     }
 
+    request = request with { LanguageLevel = profile.LanguageLevel };
     var result = await ai.CorrectTextAsync(request, apiKey);
     await store.RecordActivityAsync(profile.Id, ActivityKind.AiCorrection);
     return Results.Ok(result);
@@ -606,6 +626,44 @@ admin.MapGet("/bot/status", async (HttpContext http, IConfiguration config, IApp
     return Results.Ok(await bot.GetStatusAsync(webhookUrl));
 });
 
+admin.MapPost("/broadcast", async (HttpContext http, IConfiguration config, AdminBroadcastRequest request, IAppStore store, TelegramBotService bot) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    if (string.IsNullOrWhiteSpace(request.Message))
+    {
+        return Results.BadRequest(new { message = "متن پیام را وارد کن." });
+    }
+
+    var users = ApplyBroadcastFilter(await store.GetUsersAsync(), request).ToList();
+    var settings = await store.GetSettingsAsync();
+    var sent = 0;
+    var skipped = 0;
+    var failed = 0;
+    var errors = new List<string>();
+
+    foreach (var user in users)
+    {
+        if (!user.TelegramChatId.HasValue)
+        {
+            skipped++;
+            continue;
+        }
+
+        try
+        {
+            await bot.SendAdminMessageAsync(user, request.Message.Trim(), settings);
+            sent++;
+        }
+        catch (Exception ex)
+        {
+            failed++;
+            errors.Add($"{user.Id}: {ex.Message}");
+        }
+    }
+
+    return Results.Ok(new AdminBroadcastResult(users.Count, sent, skipped, failed, errors.Take(20).ToList()));
+});
+
 app.Run();
 
 static async Task<UserProfile?> RequireUserAsync(HttpContext http, IConfiguration config, IAppStore store)
@@ -641,6 +699,48 @@ static bool IsAdmin(HttpContext http, IConfiguration config)
         && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(actual), Encoding.UTF8.GetBytes(expected));
 }
 
+static IEnumerable<UserProfile> ApplyBroadcastFilter(IEnumerable<UserProfile> users, AdminBroadcastRequest request)
+{
+    var query = users;
+    if (request.Audience.Equals("selected", StringComparison.OrdinalIgnoreCase))
+    {
+        var ids = (request.UserIds ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        query = query.Where(user => ids.Contains(user.Id));
+    }
+
+    if (!string.IsNullOrWhiteSpace(request.Plan))
+    {
+        query = query.Where(user => user.Plan.Equals(request.Plan.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    if (request.IsActive.HasValue)
+    {
+        query = query.Where(user => user.IsActive == request.IsActive.Value);
+    }
+
+    if (!string.IsNullOrWhiteSpace(request.Source))
+    {
+        query = query.Where(user => user.Source.Equals(request.Source.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    if (!string.IsNullOrWhiteSpace(request.AccessCode))
+    {
+        query = query.Where(user => user.AccessCode.Equals(request.AccessCode.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    if (!string.IsNullOrWhiteSpace(request.Search))
+    {
+        var search = request.Search.Trim();
+        query = query.Where(user =>
+            user.Id.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || user.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || user.TelegramId.Contains(search, StringComparison.OrdinalIgnoreCase)
+            || user.TelegramUsername.Contains(search, StringComparison.OrdinalIgnoreCase));
+    }
+
+    return query.OrderByDescending(user => user.LastSeenAt);
+}
+
 static string? ResolveOpenRouterApiKey(HttpContext http, IConfiguration config)
 {
     var apiKey = http.Request.Headers["X-OpenRouter-Api-Key"].FirstOrDefault();
@@ -650,6 +750,12 @@ static string? ResolveOpenRouterApiKey(HttpContext http, IConfiguration config)
     if (keys.Count == 0) return null;
     if (keys.Count == 1) return keys[0];
     return keys[RandomNumberGenerator.GetInt32(keys.Count)];
+}
+
+static string NormalizeLanguageLevel(string? value)
+{
+    var normalized = (value ?? "B1").Trim().ToUpperInvariant();
+    return normalized is "A1" or "A2" or "B1" or "B2" or "C1" or "C2" ? normalized : "B1";
 }
 
 static List<string> ResolveOpenRouterApiKeys(IConfiguration config)

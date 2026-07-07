@@ -1,11 +1,11 @@
-const CACHE_NAME = "lingualite-v2";
+const CACHE_NAME = "lingualite-v3";
 const CORE_ASSETS = [
   "/",
   "/index.html",
   "/styles.css",
   "/app.js",
   "/manifest.webmanifest",
-  "/icons/icon.svg"
+  "/icons/lingualite-logo.png"
 ];
 
 self.addEventListener("install", (event) => {

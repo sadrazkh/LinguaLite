@@ -37,6 +37,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                     plan text NOT NULL DEFAULT 'Free',
                     features jsonb NOT NULL DEFAULT '{}'::jsonb,
                     access_code text NOT NULL DEFAULT '',
+                    language_level text NOT NULL DEFAULT 'B1',
                     reminders_enabled boolean NOT NULL DEFAULT true,
                     reminder_hour integer NULL,
                     last_reminder_at timestamptz NULL,
@@ -47,6 +48,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS telegram_id text NOT NULL DEFAULT '';
                 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS telegram_username text NOT NULL DEFAULT '';
                 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS telegram_chat_id bigint NULL;
+                ALTER TABLE app_users ADD COLUMN IF NOT EXISTS language_level text NOT NULL DEFAULT 'B1';
                 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS reminders_enabled boolean NOT NULL DEFAULT true;
                 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS reminder_hour integer NULL;
                 ALTER TABLE app_users ADD COLUMN IF NOT EXISTS last_reminder_at timestamptz NULL;
@@ -322,7 +324,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT id, source, display_name, telegram_id, telegram_username, telegram_chat_id,
-                   is_active, plan, features::text, access_code, reminders_enabled, reminder_hour,
+                   is_active, plan, features::text, access_code, language_level, reminders_enabled, reminder_hour,
                    last_reminder_at, created_at, last_seen_at
             FROM app_users
             ORDER BY last_seen_at DESC;
@@ -922,7 +924,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         command.Transaction = transaction;
         command.CommandText = """
             SELECT id, source, display_name, telegram_id, telegram_username, telegram_chat_id,
-                   is_active, plan, features::text, access_code, reminders_enabled, reminder_hour,
+                   is_active, plan, features::text, access_code, language_level, reminders_enabled, reminder_hour,
                    last_reminder_at, created_at, last_seen_at
             FROM app_users
             WHERE id = @id
@@ -940,10 +942,10 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         command.CommandText = """
             INSERT INTO app_users
                 (id, source, display_name, telegram_id, telegram_username, telegram_chat_id, is_active, plan,
-                 features, access_code, reminders_enabled, reminder_hour, last_reminder_at, created_at, last_seen_at)
+                 features, access_code, language_level, reminders_enabled, reminder_hour, last_reminder_at, created_at, last_seen_at)
             VALUES
                 (@id, @source, @display_name, @telegram_id, @telegram_username, @telegram_chat_id, @is_active, @plan,
-                 @features, @access_code, @reminders_enabled, @reminder_hour, @last_reminder_at, @created_at, @last_seen_at)
+                 @features, @access_code, @language_level, @reminders_enabled, @reminder_hour, @last_reminder_at, @created_at, @last_seen_at)
             ON CONFLICT (id) DO UPDATE SET
                 source = EXCLUDED.source,
                 display_name = EXCLUDED.display_name,
@@ -954,6 +956,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                 plan = EXCLUDED.plan,
                 features = EXCLUDED.features,
                 access_code = EXCLUDED.access_code,
+                language_level = EXCLUDED.language_level,
                 reminders_enabled = EXCLUDED.reminders_enabled,
                 reminder_hour = EXCLUDED.reminder_hour,
                 last_reminder_at = EXCLUDED.last_reminder_at,
@@ -969,6 +972,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         command.Parameters.AddWithValue("plan", user.Plan);
         command.Parameters.Add("features", NpgsqlDbType.Jsonb).Value = JsonSerializer.Serialize(user.Features, JsonOptions);
         command.Parameters.AddWithValue("access_code", user.AccessCode);
+        command.Parameters.AddWithValue("language_level", string.IsNullOrWhiteSpace(user.LanguageLevel) ? "B1" : user.LanguageLevel);
         command.Parameters.AddWithValue("reminders_enabled", user.RemindersEnabled);
         command.Parameters.Add("reminder_hour", NpgsqlDbType.Integer).Value = (object?)user.ReminderHour ?? DBNull.Value;
         command.Parameters.Add("last_reminder_at", NpgsqlDbType.TimestampTz).Value = (object?)user.LastReminderAt ?? DBNull.Value;
@@ -1079,11 +1083,12 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         Plan = reader.GetString(7),
         Features = DeserializeFeatures(reader.GetString(8)),
         AccessCode = reader.GetString(9),
-        RemindersEnabled = reader.GetBoolean(10),
-        ReminderHour = reader.IsDBNull(11) ? null : reader.GetInt32(11),
-        LastReminderAt = reader.IsDBNull(12) ? null : reader.GetFieldValue<DateTimeOffset>(12),
-        CreatedAt = reader.GetFieldValue<DateTimeOffset>(13),
-        LastSeenAt = reader.GetFieldValue<DateTimeOffset>(14)
+        LanguageLevel = reader.GetString(10),
+        RemindersEnabled = reader.GetBoolean(11),
+        ReminderHour = reader.IsDBNull(12) ? null : reader.GetInt32(12),
+        LastReminderAt = reader.IsDBNull(13) ? null : reader.GetFieldValue<DateTimeOffset>(13),
+        CreatedAt = reader.GetFieldValue<DateTimeOffset>(14),
+        LastSeenAt = reader.GetFieldValue<DateTimeOffset>(15)
     };
 
     private static FlashCard ReadCard(NpgsqlDataReader reader) => new()

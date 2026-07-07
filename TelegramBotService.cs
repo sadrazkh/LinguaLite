@@ -159,6 +159,12 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
         await SendMessageAsync(user.TelegramChatId.Value, $"وقت مرور زبان است. {dueCount} کارت آماده داری.", settings);
     }
 
+    public async Task SendAdminMessageAsync(UserProfile user, string text, AppSettingsState settings)
+    {
+        if (!user.TelegramChatId.HasValue) return;
+        await SendMessageAsync(user.TelegramChatId.Value, text, settings);
+    }
+
     private static string StartText(UserProfile profile) =>
         $"سلام {profile.DisplayName}!\nاکانتت به LinguaLite وصل شد و کارت‌ها با همین شناسه تلگرام ذخیره می‌شوند.\nبرای ورود به نسخه مرورگر یا PWA دستور /login را بزن.";
 

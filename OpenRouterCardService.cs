@@ -10,8 +10,8 @@ public sealed class OpenRouterCardService(HttpClient httpClient, IConfiguration 
     {
         var type = request.Type ?? CardType.Word;
         var prompt = type == CardType.Feedback
-            ? FeedbackPrompt(request.Text)
-            : StandardPrompt(request.Text, type);
+            ? FeedbackPrompt(request.Text, Level(request.LanguageLevel))
+            : StandardPrompt(request.Text, type, Level(request.LanguageLevel));
         var jsonText = await RequestJsonAsync(prompt, apiKey, 0.2, 900);
         return JsonSerializer.Deserialize<CreateCardRequest>(jsonText, JsonOptions)
             ?? throw new InvalidOperationException("پاسخ مدل برای کارت خالی بود.");
@@ -19,14 +19,14 @@ public sealed class OpenRouterCardService(HttpClient httpClient, IConfiguration 
 
     public async Task<DictionaryResult> LookupDictionaryAsync(DictionaryRequest request, string apiKey)
     {
-        var jsonText = await RequestJsonAsync(DictionaryPrompt(request.Text), apiKey, 0.15, 900);
+        var jsonText = await RequestJsonAsync(DictionaryPrompt(request.Text, Level(request.LanguageLevel)), apiKey, 0.15, 900);
         return JsonSerializer.Deserialize<DictionaryResult>(jsonText, JsonOptions)
             ?? throw new InvalidOperationException("پاسخ مدل برای دیکشنری خالی بود.");
     }
 
     public async Task<CorrectionResult> CorrectTextAsync(CorrectionRequest request, string apiKey)
     {
-        var jsonText = await RequestJsonAsync(CorrectionPrompt(request.Text), apiKey, 0.15, 1200);
+        var jsonText = await RequestJsonAsync(CorrectionPrompt(request.Text, Level(request.LanguageLevel)), apiKey, 0.15, 1200);
         return JsonSerializer.Deserialize<CorrectionResult>(jsonText, JsonOptions)
             ?? throw new InvalidOperationException("پاسخ مدل برای اصلاح متن خالی بود.");
     }
@@ -62,8 +62,9 @@ public sealed class OpenRouterCardService(HttpClient httpClient, IConfiguration 
         return NormalizeJson(ExtractMessageContent(document.RootElement));
     }
 
-    private static string StandardPrompt(string text, CardType type) => $"""
+    private static string StandardPrompt(string text, CardType type, string level) => $"""
         Create a clean Leitner flashcard for a Persian-speaking English learner.
+        Learner CEFR level: {level}. Match English examples, prompts, and vocabulary difficulty to this level.
         Return JSON with exactly these keys: front, back, example, prompt, answer, notes, type.
         type must be "{type}" unless another type is clearly better.
         front: exact English item or compact question. Do not make it too long.
@@ -75,8 +76,9 @@ public sealed class OpenRouterCardService(HttpClient httpClient, IConfiguration 
         Learner input: {text}
         """;
 
-    private static string FeedbackPrompt(string text) => $"""
+    private static string FeedbackPrompt(string text, string level) => $"""
         The learner writes a real mistake, correction, or teacher feedback. Build a feedback flashcard, not a vocabulary card.
+        Learner CEFR level: {level}. Explain the rule in Persian, but keep English examples suitable for this level.
         Return JSON with exactly these keys: front, back, example, prompt, answer, notes, type.
         type must be "Feedback".
         front: do NOT reveal the correction. Put only a correction task or the wrong sentence, for example "Correct this: I programmer".
@@ -88,8 +90,9 @@ public sealed class OpenRouterCardService(HttpClient httpClient, IConfiguration 
         Learner feedback or mistake: {text}
         """;
 
-    private static string DictionaryPrompt(string text) => $"""
+    private static string DictionaryPrompt(string text, string level) => $"""
         You are a compact English dictionary for a Persian-speaking learner.
+        Learner CEFR level: {level}. Make definitions and examples suitable for this level; avoid repeating the same generic examples.
         Return only JSON with exactly these keys:
         word, pronunciation, partOfSpeech, persianMeaning, englishDefinition, synonyms, examples, notes.
         Rules:
@@ -103,8 +106,9 @@ public sealed class OpenRouterCardService(HttpClient httpClient, IConfiguration 
         Learner input: {text}
         """;
 
-    private static string CorrectionPrompt(string text) => $"""
+    private static string CorrectionPrompt(string text, string level) => $"""
         You are an English writing and speaking coach for a Persian-speaking learner.
+        Learner CEFR level: {level}. Keep explanations understandable at this level and suggest alternatives that slightly stretch the learner.
         Analyze the learner text and return only JSON with exactly these keys:
         original, corrected, persianTranslation, overallNote, issues, betterAlternatives.
         issues must be an array of objects with exactly: original, corrected, reason, severity.
@@ -143,6 +147,12 @@ public sealed class OpenRouterCardService(HttpClient httpClient, IConfiguration 
         var start = text.IndexOf('{');
         var end = text.LastIndexOf('}');
         return start >= 0 && end > start ? text[start..(end + 1)] : text;
+    }
+
+    private static string Level(string? value)
+    {
+        var normalized = (value ?? "B1").Trim().ToUpperInvariant();
+        return normalized is "A1" or "A2" or "B1" or "B2" or "C1" or "C2" ? normalized : "B1";
     }
 }
 

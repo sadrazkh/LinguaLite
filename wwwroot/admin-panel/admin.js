@@ -30,6 +30,16 @@ const elements = {
   prevUsersPageButton: $("#prevUsersPageButton"),
   nextUsersPageButton: $("#nextUsersPageButton"),
   usersPageText: $("#usersPageText"),
+  broadcastAudienceInput: $("#broadcastAudienceInput"),
+  broadcastPlanInput: $("#broadcastPlanInput"),
+  broadcastActiveInput: $("#broadcastActiveInput"),
+  broadcastSourceInput: $("#broadcastSourceInput"),
+  broadcastAccessCodeInput: $("#broadcastAccessCodeInput"),
+  broadcastSearchInput: $("#broadcastSearchInput"),
+  broadcastMessageInput: $("#broadcastMessageInput"),
+  broadcastPreview: $("#broadcastPreview"),
+  previewBroadcastButton: $("#previewBroadcastButton"),
+  sendBroadcastButton: $("#sendBroadcastButton"),
   customCodeInput: $("#customCodeInput"),
   codePlanInput: $("#codePlanInput"),
   codeMaxUsesInput: $("#codeMaxUsesInput"),
@@ -49,6 +59,10 @@ elements.addPlanButton.addEventListener("click", addPlan);
 elements.createCodeButton.addEventListener("click", createCode);
 elements.prevUsersPageButton.addEventListener("click", () => changeUsersPage(-1));
 elements.nextUsersPageButton.addEventListener("click", () => changeUsersPage(1));
+elements.previewBroadcastButton.addEventListener("click", renderBroadcastPreview);
+elements.sendBroadcastButton.addEventListener("click", sendBroadcast);
+[elements.broadcastAudienceInput, elements.broadcastPlanInput, elements.broadcastActiveInput, elements.broadcastSourceInput, elements.broadcastAccessCodeInput, elements.broadcastSearchInput]
+  .forEach(input => input.addEventListener("input", renderBroadcastPreview));
 
 const savedToken = localStorage.getItem(storage.token);
 if (savedToken) {
@@ -84,6 +98,7 @@ async function loadAll() {
   renderPlans();
   renderUsers();
   renderCodes();
+  renderBroadcastPreview();
 }
 
 function renderStats() {
@@ -109,6 +124,9 @@ function renderSettings(payload) {
 
 function renderPlans() {
   elements.codePlanInput.innerHTML = state.plans
+    .map(plan => `<option value="${escapeHtml(plan.name)}">${escapeHtml(plan.name)}</option>`)
+    .join("");
+  elements.broadcastPlanInput.innerHTML = `<option value="">همه پلن‌ها</option>` + state.plans
     .map(plan => `<option value="${escapeHtml(plan.name)}">${escapeHtml(plan.name)}</option>`)
     .join("");
 
@@ -175,7 +193,7 @@ function renderUsers() {
         <div>
           <strong>${escapeHtml(user.displayName || user.id)}</strong>
           <small>${escapeHtml(user.id)} · tg:${escapeHtml(user.telegramId || "-")} · @${escapeHtml(user.telegramUsername || "-")}</small>
-          <small>${escapeHtml(user.source)} · <b class="inline-badge" style="background:${safeColor(plan?.badgeColor, "#16a34a")};color:${safeColor(plan?.badgeTextColor, "#ffffff")}">${escapeHtml(user.plan)}</b> · ${user.isActive ? "فعال" : "غیرفعال"} · کد: ${escapeHtml(user.accessCode || "-")} · ${escapeHtml(featureSummary(user.features))}</small>
+          <small>${escapeHtml(user.source)} · <b class="inline-badge" style="background:${safeColor(plan?.badgeColor, "#16a34a")};color:${safeColor(plan?.badgeTextColor, "#ffffff")}">${escapeHtml(user.plan)}</b> · سطح ${escapeHtml(user.languageLevel || "B1")} · ${user.isActive ? "فعال" : "غیرفعال"} · کد: ${escapeHtml(user.accessCode || "-")} · ${escapeHtml(featureSummary(user.features))}</small>
           <div class="user-metrics">
             <span>کارت: ${toPersianNumber(metrics.totalCards)}</span>
             <span>مرور آماده: ${toPersianNumber(metrics.dueCards)}</span>
@@ -332,6 +350,79 @@ function renderBotStatus(result) {
       <span><b>وضعیت getMe</b>${escapeHtml(result.me?.description || "ok")}</span>
     </div>
   `;
+}
+
+function renderBroadcastPreview() {
+  const users = filterBroadcastUsers();
+  const reachable = users.filter(user => Boolean(user.telegramChatId));
+  elements.broadcastPreview.innerHTML = `
+    <div class="broadcast-summary">
+      <strong>${toPersianNumber(users.length)} کاربر مطابق فیلتر</strong>
+      <span>${toPersianNumber(reachable.length)} نفر قابل ارسال با ربات</span>
+    </div>
+    <div class="broadcast-users">
+      ${users.slice(0, 24).map(user => `
+        <label class="${user.telegramChatId ? "" : "muted-user"}">
+          <input type="checkbox" data-broadcast-user="${escapeHtml(user.id)}" ${user.telegramChatId ? "checked" : "disabled"}>
+          <span>${escapeHtml(user.displayName || user.id)} <small>@${escapeHtml(user.telegramUsername || "-")} · ${escapeHtml(user.plan)} · ${user.telegramChatId ? "ربات وصل" : "بدون chat id"}</small></span>
+        </label>
+      `).join("") || "<p>کاربری با این فیلتر پیدا نشد.</p>"}
+    </div>
+  `;
+}
+
+function filterBroadcastUsers() {
+  const plan = elements.broadcastPlanInput.value;
+  const active = elements.broadcastActiveInput.value;
+  const source = elements.broadcastSourceInput.value;
+  const accessCode = elements.broadcastAccessCodeInput.value.trim();
+  const search = elements.broadcastSearchInput.value.trim().toLowerCase();
+
+  return state.users.filter(user => {
+    if (plan && user.plan !== plan) return false;
+    if (active && String(user.isActive) !== active) return false;
+    if (source && user.source !== source) return false;
+    if (accessCode && String(user.accessCode || "").toLowerCase() !== accessCode.toLowerCase()) return false;
+    if (search) {
+      const haystack = [user.id, user.displayName, user.telegramId, user.telegramUsername].join(" ").toLowerCase();
+      if (!haystack.includes(search)) return false;
+    }
+    return true;
+  });
+}
+
+function readBroadcastPayload() {
+  const audience = elements.broadcastAudienceInput.value;
+  const selectedIds = [...elements.broadcastPreview.querySelectorAll("[data-broadcast-user]:checked")].map(input => input.dataset.broadcastUser);
+  return {
+    audience,
+    userIds: audience === "selected" ? selectedIds : null,
+    plan: elements.broadcastPlanInput.value || null,
+    isActive: elements.broadcastActiveInput.value === "" ? null : elements.broadcastActiveInput.value === "true",
+    source: elements.broadcastSourceInput.value || null,
+    accessCode: elements.broadcastAccessCodeInput.value.trim() || null,
+    search: elements.broadcastSearchInput.value.trim() || null,
+    message: elements.broadcastMessageInput.value.trim()
+  };
+}
+
+async function sendBroadcast() {
+  const payload = readBroadcastPayload();
+  if (!payload.message) return showToast("متن پیام را وارد کن.");
+  if (payload.audience === "selected" && payload.userIds.length === 0) return showToast("حداقل یک کاربر را انتخاب کن.");
+
+  setButtonLoading(elements.sendBroadcastButton, true, "در حال ارسال...");
+  try {
+    const result = await adminFetch("/api/admin/broadcast", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+    showToast(`ارسال شد: ${toPersianNumber(result.sent)} · رد شد: ${toPersianNumber(result.skipped)} · خطا: ${toPersianNumber(result.failed)}`);
+  } catch (error) {
+    showToast(error.message || "ارسال پیام انجام نشد.");
+  } finally {
+    setButtonLoading(elements.sendBroadcastButton, false, "ارسال پیام");
+  }
 }
 
 async function addPlan() {

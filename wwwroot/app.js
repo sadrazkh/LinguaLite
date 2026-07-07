@@ -5,7 +5,8 @@ tg?.expand();
 const storage = {
   apiKey: "lingualite.openrouterApiKey",
   devUserId: "lingualite.devUserId",
-  sessionToken: "lingualite.sessionToken"
+  sessionToken: "lingualite.sessionToken",
+  theme: "lingualite.theme"
 };
 
 const devUserId = getOrCreateDevUserId();
@@ -80,6 +81,10 @@ const elements = {
   redeemCodeButton: $("#redeemCodeButton"),
   dailyReportText: $("#dailyReportText"),
   usageGrid: $("#usageGrid"),
+  languageLevelInput: $("#languageLevelInput"),
+  savePreferencesButton: $("#savePreferencesButton"),
+  checkUpdateButton: $("#checkUpdateButton"),
+  themeSelector: $("#themeSelector"),
   exportButton: $("#exportButton"),
   importFileInput: $("#importFileInput"),
   frontLabel: $("#frontLabel"),
@@ -190,13 +195,32 @@ function bindEvents() {
   elements.correctionButton.addEventListener("click", correctText);
   elements.apiKeyForm.addEventListener("submit", saveSettings);
   elements.activationForm.addEventListener("submit", redeemCode);
+  elements.savePreferencesButton.addEventListener("click", savePreferences);
+  elements.checkUpdateButton.addEventListener("click", checkForAppUpdate);
+  document.querySelectorAll('input[name="theme"]').forEach((radio) => {
+    radio.addEventListener("change", () => setThemeMode(radio.value));
+  });
   elements.exportButton.addEventListener("click", exportDeck);
   elements.importFileInput.addEventListener("change", importDeck);
 }
 
 function applyTelegramTheme() {
+  const mode = localStorage.getItem(storage.theme) || "auto";
+  const selected = document.querySelector(`input[name="theme"][value="${mode}"]`);
+  if (selected) selected.checked = true;
+  applyThemeMode(mode);
+}
+
+function setThemeMode(mode) {
+  localStorage.setItem(storage.theme, mode);
+  applyThemeMode(mode);
+}
+
+function applyThemeMode(mode) {
   const root = document.documentElement;
-  const colorScheme = tg?.colorScheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  const colorScheme = mode === "auto"
+    ? (tg?.colorScheme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"))
+    : mode;
   root.dataset.theme = colorScheme === "dark" ? "dark" : "light";
 
   const buttonColor = tg?.themeParams?.button_color;
@@ -297,6 +321,7 @@ function renderUserInfo(config) {
   elements.userPlanText.textContent = config.isActive ? config.plan : `${config.plan} · غیرفعال`;
   elements.storageProviderText.textContent = config.storageProvider === "postgres" ? "PostgreSQL" : "Local file";
   elements.userFeaturesText.textContent = featureSummary(config.features);
+  elements.languageLevelInput.value = config.languageLevel || "B1";
 }
 
 function renderQuota(config) {
@@ -685,6 +710,19 @@ async function redeemCode(event) {
   }
 }
 
+async function savePreferences() {
+  try {
+    await fetchJson("/api/profile/preferences", {
+      method: "PUT",
+      body: JSON.stringify({ languageLevel: elements.languageLevelInput.value })
+    });
+    showToast("تنظیمات ذخیره شد.");
+    await loadAll();
+  } catch (error) {
+    showToast(error.message || "تنظیمات ذخیره نشد.");
+  }
+}
+
 async function exportDeck() {
   if (!hasFeature("exportImport")) return planLocked("خروجی و ورودی دیتا");
   try {
@@ -819,8 +857,27 @@ async function fetchJson(url, options = {}) {
 function registerPwa() {
   if (!("serviceWorker" in navigator)) return;
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/service-worker.js").catch(() => {});
+    navigator.serviceWorker.register("/service-worker.js").then((registration) => {
+      registration.update().catch(() => {});
+    }).catch(() => {});
   });
+}
+
+async function checkForAppUpdate() {
+  if (!("serviceWorker" in navigator)) return showToast("PWA روی این مرورگر فعال نیست.");
+  setButtonLoading(elements.checkUpdateButton, true, "در حال بررسی...");
+  try {
+    const registration = await navigator.serviceWorker.getRegistration();
+    if (registration) {
+      await registration.update();
+    }
+    showToast("آخرین نسخه بررسی شد. صفحه دوباره بارگذاری می‌شود.");
+    setTimeout(() => window.location.reload(), 700);
+  } catch {
+    showToast("بررسی آپدیت انجام نشد.");
+  } finally {
+    setButtonLoading(elements.checkUpdateButton, false, "بررسی آپدیت");
+  }
 }
 
 function showLoadError(error) {

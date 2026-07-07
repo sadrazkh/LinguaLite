@@ -631,6 +631,22 @@ body.auth-required .view {
   border-color: color-mix(in srgb, var(--warning), var(--line) 50%);
 }
 
+.preferences-panel {
+  border-color: color-mix(in srgb, var(--primary), var(--line) 55%);
+}
+
+.settings-block {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 900;
+}
+
+.segmented.compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .file-button {
   min-height: 48px;
   display: grid;

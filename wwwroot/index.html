@@ -225,6 +225,36 @@
         <div class="usage-grid" id="usageGrid"></div>
       </article>
 
+      <article class="panel preferences-panel">
+        <div class="panel-title">
+          <strong>تنظیمات تجربه</strong>
+          <span>تم، سطح زبان و بروزرسانی نسخه نصب‌شده را اینجا تنظیم کن.</span>
+        </div>
+        <div class="settings-block">
+          <span>تم برنامه</span>
+          <div class="segmented compact" id="themeSelector" role="radiogroup" aria-label="تم برنامه">
+            <label><input type="radio" name="theme" value="auto"><span>خودکار</span></label>
+            <label><input type="radio" name="theme" value="light"><span>روشن</span></label>
+            <label><input type="radio" name="theme" value="dark"><span>تاریک</span></label>
+          </div>
+        </div>
+        <label class="settings-block">
+          <span>سطح زبان</span>
+          <select id="languageLevelInput">
+            <option value="A1">A1 - شروع</option>
+            <option value="A2">A2 - پایه</option>
+            <option value="B1">B1 - متوسط</option>
+            <option value="B2">B2 - بالاتر از متوسط</option>
+            <option value="C1">C1 - پیشرفته</option>
+            <option value="C2">C2 - مسلط</option>
+          </select>
+        </label>
+        <div class="tool-row">
+          <button class="primary-button" id="savePreferencesButton" type="button">ذخیره تنظیمات</button>
+          <button class="secondary-button" id="checkUpdateButton" type="button">بررسی آپدیت</button>
+        </div>
+      </article>
+
       <form class="panel settings-form activation-form" id="activationForm">
         <div class="panel-title">
           <strong>فعال‌سازی پلن</strong>

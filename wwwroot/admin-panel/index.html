@@ -76,6 +76,40 @@
         <div class="plans-board" id="plansBoard"></div>
       </section>
 
+      <section class="panel broadcast-panel">
+        <div class="panel-title">
+          <strong>ارسال پیام با ربات</strong>
+          <span>برای اطلاع‌رسانی، تبلیغات، یادآوری یا پیام‌های هدفمند. فقط کاربرهایی پیام می‌گیرند که chat id تلگرام داشته باشند.</span>
+        </div>
+        <div class="settings-grid">
+          <label><span>مخاطب</span><select id="broadcastAudienceInput">
+            <option value="filtered">فیلتر شده</option>
+            <option value="all">همه کاربران</option>
+            <option value="selected">کاربران انتخابی</option>
+          </select></label>
+          <label><span>پلن</span><select id="broadcastPlanInput"></select></label>
+          <label><span>وضعیت</span><select id="broadcastActiveInput">
+            <option value="">همه</option>
+            <option value="true">فعال</option>
+            <option value="false">غیرفعال</option>
+          </select></label>
+          <label><span>منبع</span><select id="broadcastSourceInput">
+            <option value="">همه</option>
+            <option value="telegram">telegram</option>
+            <option value="telegram-bot">telegram-bot</option>
+            <option value="dev">dev</option>
+          </select></label>
+          <label><span>کد دسترسی</span><input id="broadcastAccessCodeInput" placeholder="PLUS1405"></label>
+          <label><span>جستجو</span><input id="broadcastSearchInput" placeholder="نام، username، telegram id"></label>
+        </div>
+        <textarea id="broadcastMessageInput" rows="4" placeholder="متن پیام ربات..."></textarea>
+        <div class="broadcast-preview" id="broadcastPreview"></div>
+        <div class="tool-row">
+          <button class="secondary-button" id="previewBroadcastButton" type="button">محاسبه مخاطب</button>
+          <button class="primary-button" id="sendBroadcastButton" type="button">ارسال پیام</button>
+        </div>
+      </section>
+
       <section class="panel">
         <div class="panel-title">
           <strong>کاربران</strong>
