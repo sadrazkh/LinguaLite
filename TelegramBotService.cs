@@ -162,6 +162,10 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
     public async Task SendAdminMessageAsync(UserProfile user, string text, AppSettingsState settings)
     {
         if (!user.TelegramChatId.HasValue) return;
+        if (string.IsNullOrWhiteSpace(configuration["TELEGRAM_BOT_TOKEN"]))
+        {
+            throw new InvalidOperationException("TELEGRAM_BOT_TOKEN تنظیم نشده است.");
+        }
         await SendMessageAsync(user.TelegramChatId.Value, text, settings);
     }
 

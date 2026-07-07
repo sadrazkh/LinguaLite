@@ -103,11 +103,17 @@
           <label><span>جستجو</span><input id="broadcastSearchInput" placeholder="نام، username، telegram id"></label>
         </div>
         <textarea id="broadcastMessageInput" rows="4" placeholder="متن پیام ربات..."></textarea>
+        <div class="broadcast-actions">
+          <button class="mini-button" id="selectBroadcastUsersButton" type="button">انتخاب همه قابل ارسال</button>
+          <button class="mini-button" id="clearBroadcastUsersButton" type="button">پاک کردن انتخاب‌ها</button>
+          <span id="broadcastSelectionText">۰ انتخاب</span>
+        </div>
         <div class="broadcast-preview" id="broadcastPreview"></div>
         <div class="tool-row">
           <button class="secondary-button" id="previewBroadcastButton" type="button">محاسبه مخاطب</button>
           <button class="primary-button" id="sendBroadcastButton" type="button">ارسال پیام</button>
         </div>
+        <div class="broadcast-result" id="broadcastResult" hidden></div>
       </section>
 
       <section class="panel">

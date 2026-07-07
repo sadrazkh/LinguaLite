@@ -702,10 +702,17 @@ static bool IsAdmin(HttpContext http, IConfiguration config)
 static IEnumerable<UserProfile> ApplyBroadcastFilter(IEnumerable<UserProfile> users, AdminBroadcastRequest request)
 {
     var query = users;
+    if (request.Audience.Equals("all", StringComparison.OrdinalIgnoreCase))
+    {
+        return query.OrderByDescending(user => user.LastSeenAt);
+    }
+
     if (request.Audience.Equals("selected", StringComparison.OrdinalIgnoreCase))
     {
         var ids = (request.UserIds ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        query = query.Where(user => ids.Contains(user.Id));
+        return query
+            .Where(user => ids.Contains(user.Id))
+            .OrderByDescending(user => user.LastSeenAt);
     }
 
     if (!string.IsNullOrWhiteSpace(request.Plan))

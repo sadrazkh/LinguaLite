@@ -37,7 +37,11 @@ const elements = {
   broadcastAccessCodeInput: $("#broadcastAccessCodeInput"),
   broadcastSearchInput: $("#broadcastSearchInput"),
   broadcastMessageInput: $("#broadcastMessageInput"),
+  selectBroadcastUsersButton: $("#selectBroadcastUsersButton"),
+  clearBroadcastUsersButton: $("#clearBroadcastUsersButton"),
+  broadcastSelectionText: $("#broadcastSelectionText"),
   broadcastPreview: $("#broadcastPreview"),
+  broadcastResult: $("#broadcastResult"),
   previewBroadcastButton: $("#previewBroadcastButton"),
   sendBroadcastButton: $("#sendBroadcastButton"),
   customCodeInput: $("#customCodeInput"),
@@ -49,6 +53,7 @@ const elements = {
 };
 
 let state = { users: [], metrics: [], plans: [], codes: [], codeUsage: [], settings: null, draggingPlanId: null, usersPage: 1, usersPageSize: 10 };
+const selectedBroadcastUserIds = new Set();
 
 elements.loginForm.addEventListener("submit", adminLogin);
 elements.logoutButton.addEventListener("click", logout);
@@ -61,8 +66,14 @@ elements.prevUsersPageButton.addEventListener("click", () => changeUsersPage(-1)
 elements.nextUsersPageButton.addEventListener("click", () => changeUsersPage(1));
 elements.previewBroadcastButton.addEventListener("click", renderBroadcastPreview);
 elements.sendBroadcastButton.addEventListener("click", sendBroadcast);
+elements.selectBroadcastUsersButton.addEventListener("click", selectAllBroadcastUsers);
+elements.clearBroadcastUsersButton.addEventListener("click", clearBroadcastUsers);
+elements.broadcastPreview.addEventListener("change", updateBroadcastSelectionFromInput);
 [elements.broadcastAudienceInput, elements.broadcastPlanInput, elements.broadcastActiveInput, elements.broadcastSourceInput, elements.broadcastAccessCodeInput, elements.broadcastSearchInput]
-  .forEach(input => input.addEventListener("input", renderBroadcastPreview));
+  .forEach(input => input.addEventListener("input", () => {
+    if (elements.broadcastAudienceInput.value !== "selected") selectedBroadcastUserIds.clear();
+    renderBroadcastPreview();
+  }));
 
 const savedToken = localStorage.getItem(storage.token);
 if (savedToken) {
@@ -355,15 +366,18 @@ function renderBotStatus(result) {
 function renderBroadcastPreview() {
   const users = filterBroadcastUsers();
   const reachable = users.filter(user => Boolean(user.telegramChatId));
+  const selectedReachable = users.filter(user => user.telegramChatId && selectedBroadcastUserIds.has(user.id));
+  elements.broadcastSelectionText.textContent = `${toPersianNumber(selectedBroadcastUserIds.size)} انتخاب`;
   elements.broadcastPreview.innerHTML = `
     <div class="broadcast-summary">
       <strong>${toPersianNumber(users.length)} کاربر مطابق فیلتر</strong>
       <span>${toPersianNumber(reachable.length)} نفر قابل ارسال با ربات</span>
+      <span>${toPersianNumber(selectedReachable.length)} انتخاب قابل ارسال</span>
     </div>
     <div class="broadcast-users">
-      ${users.slice(0, 24).map(user => `
+      ${users.map(user => `
         <label class="${user.telegramChatId ? "" : "muted-user"}">
-          <input type="checkbox" data-broadcast-user="${escapeHtml(user.id)}" ${user.telegramChatId ? "checked" : "disabled"}>
+          <input type="checkbox" data-broadcast-user="${escapeHtml(user.id)}" ${selectedBroadcastUserIds.has(user.id) ? "checked" : ""} ${user.telegramChatId ? "" : "disabled"}>
           <span>${escapeHtml(user.displayName || user.id)} <small>@${escapeHtml(user.telegramUsername || "-")} · ${escapeHtml(user.plan)} · ${user.telegramChatId ? "ربات وصل" : "بدون chat id"}</small></span>
         </label>
       `).join("") || "<p>کاربری با این فیلتر پیدا نشد.</p>"}
@@ -372,6 +386,7 @@ function renderBroadcastPreview() {
 }
 
 function filterBroadcastUsers() {
+  if (elements.broadcastAudienceInput.value === "all") return [...state.users];
   const plan = elements.broadcastPlanInput.value;
   const active = elements.broadcastActiveInput.value;
   const source = elements.broadcastSourceInput.value;
@@ -393,15 +408,14 @@ function filterBroadcastUsers() {
 
 function readBroadcastPayload() {
   const audience = elements.broadcastAudienceInput.value;
-  const selectedIds = [...elements.broadcastPreview.querySelectorAll("[data-broadcast-user]:checked")].map(input => input.dataset.broadcastUser);
   return {
     audience,
-    userIds: audience === "selected" ? selectedIds : null,
-    plan: elements.broadcastPlanInput.value || null,
-    isActive: elements.broadcastActiveInput.value === "" ? null : elements.broadcastActiveInput.value === "true",
-    source: elements.broadcastSourceInput.value || null,
-    accessCode: elements.broadcastAccessCodeInput.value.trim() || null,
-    search: elements.broadcastSearchInput.value.trim() || null,
+    userIds: audience === "selected" ? [...selectedBroadcastUserIds] : null,
+    plan: audience === "all" ? null : elements.broadcastPlanInput.value || null,
+    isActive: audience === "all" || elements.broadcastActiveInput.value === "" ? null : elements.broadcastActiveInput.value === "true",
+    source: audience === "all" ? null : elements.broadcastSourceInput.value || null,
+    accessCode: audience === "all" ? null : elements.broadcastAccessCodeInput.value.trim() || null,
+    search: audience === "all" ? null : elements.broadcastSearchInput.value.trim() || null,
     message: elements.broadcastMessageInput.value.trim()
   };
 }
@@ -417,12 +431,52 @@ async function sendBroadcast() {
       method: "POST",
       body: JSON.stringify(payload)
     });
+    renderBroadcastResult(result);
     showToast(`ارسال شد: ${toPersianNumber(result.sent)} · رد شد: ${toPersianNumber(result.skipped)} · خطا: ${toPersianNumber(result.failed)}`);
   } catch (error) {
+    elements.broadcastResult.hidden = false;
+    elements.broadcastResult.innerHTML = `<strong class="danger-text">ارسال انجام نشد</strong><span>${escapeHtml(error.message || "خطای نامشخص")}</span>`;
     showToast(error.message || "ارسال پیام انجام نشد.");
   } finally {
     setButtonLoading(elements.sendBroadcastButton, false, "ارسال پیام");
   }
+}
+
+function renderBroadcastResult(result) {
+  elements.broadcastResult.hidden = false;
+  const errors = Array.isArray(result.errors) && result.errors.length
+    ? `<details><summary>خطاها</summary><pre>${escapeHtml(result.errors.join("\n"))}</pre></details>`
+    : "";
+  elements.broadcastResult.innerHTML = `
+    <strong>نتیجه ارسال</strong>
+    <span>هدف: ${toPersianNumber(result.matched)} · ارسال‌شده: ${toPersianNumber(result.sent)} · بدون chat id: ${toPersianNumber(result.skipped)} · خطا: ${toPersianNumber(result.failed)}</span>
+    ${errors}
+  `;
+}
+
+function updateBroadcastSelectionFromInput(event) {
+  const input = event.target.closest("[data-broadcast-user]");
+  if (!input) return;
+  if (input.checked) {
+    selectedBroadcastUserIds.add(input.dataset.broadcastUser);
+  } else {
+    selectedBroadcastUserIds.delete(input.dataset.broadcastUser);
+  }
+  elements.broadcastAudienceInput.value = "selected";
+  renderBroadcastPreview();
+}
+
+function selectAllBroadcastUsers() {
+  filterBroadcastUsers()
+    .filter(user => Boolean(user.telegramChatId))
+    .forEach(user => selectedBroadcastUserIds.add(user.id));
+  elements.broadcastAudienceInput.value = "selected";
+  renderBroadcastPreview();
+}
+
+function clearBroadcastUsers() {
+  selectedBroadcastUserIds.clear();
+  renderBroadcastPreview();
 }
 
 async function addPlan() {
