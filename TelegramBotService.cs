@@ -215,8 +215,15 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
     private async Task RedeemCodeAsync(UserProfile profile, long chatId, string code, AppSettingsState settings)
     {
         var result = await store.RedeemCodeAsync(profile.Id, code);
+        if (result.Success && result.Profile is not null)
+        {
+            var plan = await store.GetEffectivePlanAsync(result.Profile.Plan);
+            await SendMessageAsync(chatId, PlanActivationText(result.Profile, plan), settings);
+            return;
+        }
+
         await SendMessageAsync(chatId,
-            result.Success ? $"کد فعال شد. پلن جدید: {result.Profile?.Plan}" : result.Message,
+            result.Message,
             settings);
     }
 
@@ -446,6 +453,39 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
 
 
 
+    private static string PlanActivationText(UserProfile profile, PlanDefinition plan)
+    {
+        var featureList = EnabledFeatureLabels(profile.Features);
+        var featuresText = featureList.Count == 0 ? "فعلا دسترسی ویژه‌ای فعال نیست." : string.Join("، ", featureList);
+
+        return $"""
+            کد فعال شد.
+            پلن فعلی شما: {plan.Name}
+
+            محدودیت‌های این پلن:
+            کارت با AI: روزانه {FormatLimit(plan.AiDailyLimit)}، ماهانه {FormatLimit(plan.AiMonthlyLimit)}
+            دیکشنری: روزانه {FormatLimit(plan.DictionaryDailyLimit)}، ماهانه {FormatLimit(plan.DictionaryMonthlyLimit)}
+            اصلاح متن: روزانه {FormatLimit(plan.CorrectionDailyLimit)}، ماهانه {FormatLimit(plan.CorrectionMonthlyLimit)}
+            سقف کارت‌ها: {FormatLimit(plan.CardLimit)}
+
+            دسترسی‌های فعال:
+            {featuresText}
+            """;
+    }
+
+    private static string FormatLimit(int value) => value < 0 ? "نامحدود" : value.ToString();
+
+    private static List<string> EnabledFeatureLabels(FeatureSet features)
+    {
+        var labels = new List<string>();
+        if (features.Ai) labels.Add("تکمیل کارت با AI");
+        if (features.Dictionary) labels.Add("دیکشنری هوشمند");
+        if (features.TextCorrection) labels.Add("اصلاح متن");
+        if (features.FeedbackCards) labels.Add("کارت فیدبک");
+        if (features.ExportImport) labels.Add("ایمپورت و اکسپورت");
+        if (features.UnlimitedCards) labels.Add("کارت نامحدود");
+        return labels;
+    }
 }
 
 public sealed record TelegramApiRawResult(bool Ok, int Status, string Body, string Description);

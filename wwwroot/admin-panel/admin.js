@@ -65,6 +65,14 @@ const elements = {
 
 let state = { users: [], metrics: [], plans: [], packages: [], codes: [], codeUsage: [], settings: null, draggingPlanId: null, usersPage: 1, usersPageSize: 10 };
 const selectedBroadcastUserIds = new Set();
+const adminTabs = [
+  { id: "settings", label: "تنظیمات", count: () => "", panel: () => elements.settingsForm.closest(".panel") },
+  { id: "plans", label: "پلن‌ها", count: () => state.plans.length, panel: () => elements.plansBoard.closest(".panel") },
+  { id: "packages", label: "بسته‌ها", count: () => state.packages.length, panel: () => elements.packageForm.closest(".panel") },
+  { id: "broadcast", label: "پیام‌رسانی", count: () => filterBroadcastUsers().length, panel: () => elements.broadcastMessageInput.closest(".panel") },
+  { id: "users", label: "کاربران", count: () => state.users.length, panel: () => elements.usersList.closest(".panel") },
+  { id: "codes", label: "کدها", count: () => state.codes.length, panel: () => elements.codesList.closest(".panel") }
+];
 
 elements.loginForm.addEventListener("submit", adminLogin);
 elements.logoutButton.addEventListener("click", logout);
@@ -117,6 +125,7 @@ async function loadAll() {
   state.usersPage = Math.min(state.usersPage, getUsersPageCount());
   elements.dashboard.hidden = false;
   elements.logoutButton.hidden = false;
+  ensureAdminTabs();
   setStatus("ادمین تایید شد.", "ok");
   renderStats();
   renderSettings(settingsPayload);
@@ -125,12 +134,53 @@ async function loadAll() {
   renderUsers();
   renderCodes();
   renderBroadcastPreview();
+  switchAdminTab(state.adminTab || "settings");
 }
 
 function renderStats() {
   elements.usersCount.textContent = toPersianNumber(state.users.length);
   elements.plansCount.textContent = toPersianNumber(state.plans.length);
   elements.codesCount.textContent = toPersianNumber(state.codes.length);
+  updateAdminTabs();
+}
+
+function ensureAdminTabs() {
+  if (document.querySelector(".admin-tabs")) return;
+  const nav = document.createElement("nav");
+  nav.className = "admin-tabs";
+  nav.setAttribute("aria-label", "بخش‌های پنل ادمین");
+  nav.innerHTML = adminTabs.map(tab => `
+    <button type="button" data-admin-tab="${tab.id}">
+      <span>${tab.label}</span>
+      <small></small>
+    </button>
+  `).join("");
+  document.querySelector(".admin-stats")?.after(nav);
+  nav.querySelectorAll("[data-admin-tab]").forEach(button => {
+    button.addEventListener("click", () => switchAdminTab(button.dataset.adminTab));
+  });
+}
+
+function switchAdminTab(tabId) {
+  const activeId = adminTabs.some(tab => tab.id === tabId) ? tabId : "settings";
+  state.adminTab = activeId;
+  adminTabs.forEach(tab => {
+    const panel = tab.panel();
+    if (panel) panel.hidden = tab.id !== activeId;
+  });
+  updateAdminTabs();
+}
+
+function updateAdminTabs() {
+  const nav = document.querySelector(".admin-tabs");
+  if (!nav) return;
+  adminTabs.forEach(tab => {
+    const button = nav.querySelector(`[data-admin-tab="${tab.id}"]`);
+    if (!button) return;
+    button.classList.toggle("active", tab.id === (state.adminTab || "settings"));
+    const count = tab.count();
+    button.querySelector("small").textContent = count === "" ? "" : toPersianNumber(count);
+  });
 }
 
 function renderSettings(payload) {
@@ -406,6 +456,7 @@ function renderBroadcastPreview() {
   const users = filterBroadcastUsers();
   const reachable = users.filter(user => Boolean(user.telegramChatId));
   const selectedReachable = users.filter(user => user.telegramChatId && selectedBroadcastUserIds.has(user.id));
+  updateAdminTabs();
   elements.broadcastSelectionText.textContent = `${toPersianNumber(selectedBroadcastUserIds.size)} انتخاب`;
   elements.broadcastPreview.innerHTML = `
     <div class="broadcast-summary">

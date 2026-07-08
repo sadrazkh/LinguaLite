@@ -352,12 +352,27 @@ api.MapPost("/packages/{id}/import", async (HttpContext http, IConfiguration con
     return Results.Ok(result);
 });
 
-api.MapPost("/access/redeem", async (HttpContext http, IConfiguration config, RedeemCodeRequest request, IAppStore store) =>
+api.MapPost("/access/redeem", async (HttpContext http, IConfiguration config, RedeemCodeRequest request, IAppStore store, TelegramBotService bot) =>
 {
     var profile = await RequireUserAsync(http, config, store);
     if (profile is null) return Results.Unauthorized();
 
+    var previousPlan = profile.Plan;
     var result = await store.RedeemCodeAsync(profile.Id, request.Code);
+    if (result.Success
+        && result.Profile is not null
+        && !result.Profile.Plan.Equals(previousPlan, StringComparison.OrdinalIgnoreCase))
+    {
+        try
+        {
+            await NotifyPlanChangedAsync(result.Profile, previousPlan, store, bot);
+        }
+        catch
+        {
+            // The activation code should still be accepted even if Telegram delivery fails.
+        }
+    }
+
     return result.Success ? Results.Ok(result.Profile) : Results.BadRequest(new { message = result.Message });
 });
 
@@ -491,9 +506,13 @@ admin.MapGet("/user-metrics", async (HttpContext http, IConfiguration config, IA
     return Results.Ok(await store.GetAdminUserMetricsAsync());
 });
 
-admin.MapPut("/users/{id}", async (HttpContext http, IConfiguration config, string id, AdminUpdateUserRequest request, IAppStore store) =>
+admin.MapPut("/users/{id}", async (HttpContext http, IConfiguration config, string id, AdminUpdateUserRequest request, IAppStore store, TelegramBotService bot) =>
 {
     if (!IsAdmin(http, config)) return Results.Unauthorized();
+
+    var before = (await store.GetUsersAsync())
+        .FirstOrDefault(user => user.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+    var previousPlan = before?.Plan ?? string.Empty;
 
     var profile = await store.UpdateUserAsync(id, user =>
     {
@@ -503,6 +522,20 @@ admin.MapPut("/users/{id}", async (HttpContext http, IConfiguration config, stri
         if (request.RemindersEnabled.HasValue) user.RemindersEnabled = request.RemindersEnabled.Value;
         if (request.ReminderHour.HasValue) user.ReminderHour = request.ReminderHour.Value;
     });
+
+    if (profile is not null
+        && !string.IsNullOrWhiteSpace(request.Plan)
+        && !profile.Plan.Equals(previousPlan, StringComparison.OrdinalIgnoreCase))
+    {
+        try
+        {
+            await NotifyPlanChangedAsync(profile, previousPlan, store, bot);
+        }
+        catch
+        {
+            // The admin action should still succeed even if Telegram is not reachable.
+        }
+    }
 
     return profile is null ? Results.NotFound() : Results.Ok(profile);
 });
@@ -806,6 +839,52 @@ static IEnumerable<UserProfile> ApplyBroadcastFilter(IEnumerable<UserProfile> us
     }
 
     return query.OrderByDescending(user => user.LastSeenAt);
+}
+
+static async Task NotifyPlanChangedAsync(UserProfile profile, string previousPlan, IAppStore store, TelegramBotService bot)
+{
+    if (!profile.TelegramChatId.HasValue) return;
+
+    var settings = await store.GetSettingsAsync();
+    var plan = await store.GetEffectivePlanAsync(profile.Plan);
+    await bot.SendAdminMessageAsync(profile, PlanChangedMessage(profile, previousPlan, plan), settings);
+}
+
+static string PlanChangedMessage(UserProfile profile, string previousPlan, PlanDefinition plan)
+{
+    var oldPlan = string.IsNullOrWhiteSpace(previousPlan) ? "نامشخص" : previousPlan;
+    var featureList = EnabledFeatureLabels(profile.Features);
+    var featuresText = featureList.Count == 0 ? "فعلا دسترسی ویژه‌ای فعال نیست." : string.Join("، ", featureList);
+
+    return $"""
+        پلن شما در LinguaLite تغییر کرد.
+
+        پلن قبلی: {oldPlan}
+        پلن جدید: {plan.Name}
+
+        محدودیت‌های پلن جدید:
+        کارت با AI: روزانه {FormatLimit(plan.AiDailyLimit)}، ماهانه {FormatLimit(plan.AiMonthlyLimit)}
+        دیکشنری: روزانه {FormatLimit(plan.DictionaryDailyLimit)}، ماهانه {FormatLimit(plan.DictionaryMonthlyLimit)}
+        اصلاح متن: روزانه {FormatLimit(plan.CorrectionDailyLimit)}، ماهانه {FormatLimit(plan.CorrectionMonthlyLimit)}
+        سقف کارت‌ها: {FormatLimit(plan.CardLimit)}
+
+        دسترسی‌های فعال حساب شما:
+        {featuresText}
+        """;
+}
+
+static string FormatLimit(int value) => value < 0 ? "نامحدود" : value.ToString();
+
+static List<string> EnabledFeatureLabels(FeatureSet features)
+{
+    var labels = new List<string>();
+    if (features.Ai) labels.Add("تکمیل کارت با AI");
+    if (features.Dictionary) labels.Add("دیکشنری هوشمند");
+    if (features.TextCorrection) labels.Add("اصلاح متن");
+    if (features.FeedbackCards) labels.Add("کارت فیدبک");
+    if (features.ExportImport) labels.Add("ایمپورت و اکسپورت");
+    if (features.UnlimitedCards) labels.Add("کارت نامحدود");
+    return labels;
 }
 
 static object PackageSummary(LearningPackage package, DeckState deck, string planName)
