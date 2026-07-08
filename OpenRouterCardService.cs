@@ -24,6 +24,47 @@ public sealed class OpenRouterCardService(HttpClient httpClient, IConfiguration 
             ?? throw new InvalidOperationException("پاسخ مدل برای دیکشنری خالی بود.");
     }
 
+    public async Task<List<PackageCardRequest>> CompletePackageCardsAsync(PackageCardsGenerateRequest request, string apiKey)
+    {
+        var words = (request.Words ?? [])
+            .Select(word => word.Trim())
+            .Where(word => !string.IsNullOrWhiteSpace(word))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(60)
+            .ToList();
+
+        if (words.Count == 0)
+        {
+            return [];
+        }
+
+        var generated = new List<PackageCardRequest>();
+        foreach (var chunk in words.Chunk(20))
+        {
+            var chunkWords = chunk.ToList();
+            var maxTokens = Math.Clamp(chunkWords.Count * 280, 1200, 6000);
+            var jsonText = await RequestJsonAsync(PackageCardsPrompt(chunkWords, request.Type, Level(request.LanguageLevel)), apiKey, 0.18, maxTokens);
+            var result = JsonSerializer.Deserialize<PackageCardsGenerateResult>(jsonText, JsonOptions)
+                ?? throw new InvalidOperationException("پاسخ مدل برای کارت‌های بسته خالی بود.");
+            generated.AddRange(result.Cards);
+        }
+
+        return generated
+            .Where(card => !string.IsNullOrWhiteSpace(card.Front) && !string.IsNullOrWhiteSpace(card.Back))
+            .Select(card => card with
+            {
+                Id = string.IsNullOrWhiteSpace(card.Id) ? Slug(card.Front) : Slug(card.Id),
+                Front = card.Front.Trim(),
+                Back = card.Back.Trim(),
+                Example = card.Example?.Trim() ?? string.Empty,
+                Prompt = card.Prompt?.Trim() ?? string.Empty,
+                Answer = card.Answer?.Trim() ?? string.Empty,
+                Notes = card.Notes?.Trim() ?? string.Empty,
+                Type = card.Type
+            })
+            .ToList();
+    }
+
     public async Task<CorrectionResult> CorrectTextAsync(CorrectionRequest request, string apiKey)
     {
         var jsonText = await RequestJsonAsync(CorrectionPrompt(request.Text, Level(request.LanguageLevel)), apiKey, 0.15, 1200);
@@ -74,6 +115,25 @@ public sealed class OpenRouterCardService(HttpClient httpClient, IConfiguration 
         answer: ideal short answer.
         notes: Persian notes about usage, register, collocations, and common mistakes.
         Learner input: {text}
+        """;
+
+    private static string PackageCardsPrompt(List<string> words, CardType type, string level) => $"""
+        Build package-ready Leitner flashcards for Persian-speaking English learners.
+        Learner CEFR level for examples and prompts: {level}.
+        Return only one JSON object with exactly one key: cards.
+        cards must be an array. Create exactly one card for each input item, in the same order.
+        Each card must have exactly these keys: id, front, back, example, prompt, answer, notes, type.
+        type must be "{type}" unless the item is clearly not vocabulary.
+        id: URL-safe lowercase English slug based on the front.
+        front: the exact English word or phrase, short and clean.
+        back: concise Persian meaning with the most useful sense first.
+        example: one natural English sentence, not generic, matched to the learner level.
+        prompt: one active-recall question that does not reveal the answer.
+        answer: short ideal answer, usually Persian meaning or corrected target.
+        notes: Persian usage note with collocation, register, and one common mistake.
+        Avoid duplicate cards. Avoid repeating the same example pattern.
+        Input items:
+        {string.Join("\n", words.Select((word, index) => $"{index + 1}. {word}"))}
         """;
 
     private static string FeedbackPrompt(string text, string level) => $"""
@@ -153,6 +213,22 @@ public sealed class OpenRouterCardService(HttpClient httpClient, IConfiguration 
     {
         var normalized = (value ?? "B1").Trim().ToUpperInvariant();
         return normalized is "A1" or "A2" or "B1" or "B2" or "C1" or "C2" ? normalized : "B1";
+    }
+
+    private static string Slug(string value)
+    {
+        var cleaned = new string((value ?? string.Empty)
+            .Trim()
+            .ToLowerInvariant()
+            .Select(ch => char.IsLetterOrDigit(ch) ? ch : '-')
+            .ToArray());
+
+        while (cleaned.Contains("--", StringComparison.Ordinal))
+        {
+            cleaned = cleaned.Replace("--", "-", StringComparison.Ordinal);
+        }
+
+        return cleaned.Trim('-');
     }
 }
 

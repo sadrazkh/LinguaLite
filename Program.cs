@@ -634,6 +634,32 @@ admin.MapGet("/packages", async (HttpContext http, IConfiguration config, IAppSt
     return Results.Ok(await store.GetPackagesAsync());
 });
 
+admin.MapPost("/packages/cards/complete", async (HttpContext http, IConfiguration config, PackageCardsGenerateRequest request, OpenRouterCardService ai) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+
+    var words = (request.Words ?? [])
+        .Select(word => word.Trim())
+        .Where(word => !string.IsNullOrWhiteSpace(word))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Take(60)
+        .ToList();
+
+    if (words.Count == 0)
+    {
+        return Results.BadRequest(new { message = "حداقل یک کلمه برای ساخت کارت وارد کن." });
+    }
+
+    var apiKey = ResolveOpenRouterApiKey(http, config);
+    if (string.IsNullOrWhiteSpace(apiKey))
+    {
+        return Results.BadRequest(new { message = "OPENROUTER_API_KEY یا OPENROUTER_API_KEYS روی سرور تنظیم نشده است." });
+    }
+
+    var cards = await ai.CompletePackageCardsAsync(request with { Words = words }, apiKey);
+    return Results.Ok(new { cards, count = cards.Count });
+});
+
 admin.MapPut("/packages/{id}", async (HttpContext http, IConfiguration config, string id, UpsertPackageRequest request, IAppStore store) =>
 {
     if (!IsAdmin(http, config)) return Results.Unauthorized();

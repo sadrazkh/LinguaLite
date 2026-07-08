@@ -410,6 +410,8 @@ public sealed record CreateAccessCodeRequest(string? Code, string? Plan, Feature
 public sealed record UpdateAccessCodeRequest(string? Plan, FeatureSet? Features, int? MaxUses);
 public sealed record UpdateUserPreferencesRequest(string? LanguageLevel);
 public sealed record PackageCardRequest(string Id, string Front, string Back, string? Example, string? Prompt, string? Answer, string? Notes, CardType Type = CardType.Word);
+public sealed record PackageCardsGenerateRequest(List<string> Words, string? LanguageLevel = null, CardType Type = CardType.Word);
+public sealed record PackageCardsGenerateResult(List<PackageCardRequest> Cards);
 public sealed record UpsertPackageRequest(string Id, string Title, string Description, List<string>? RequiredPlans, bool IsPublished, int SortOrder, List<PackageCardRequest> Cards);
 public sealed record PackageImportRequest(int Count);
 public sealed record PackageImportResult(string PackageId, int Requested, int Added, int SkippedDuplicate, int SkippedAccess, string Message);

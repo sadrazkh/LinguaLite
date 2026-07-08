@@ -259,6 +259,99 @@
   font-family: Vazirmatn, ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
+.package-ai-builder {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--primary), var(--line) 58%);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--primary), var(--surface-2) 90%);
+}
+
+.builder-head {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: 10px;
+  align-items: start;
+}
+
+.builder-head div {
+  display: grid;
+  gap: 4px;
+}
+
+.builder-head strong {
+  color: var(--text);
+}
+
+.builder-head span,
+.builder-note {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.package-words-input {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: plaintext;
+  min-height: 116px;
+}
+
+.package-generated-preview {
+  display: grid;
+  gap: 9px;
+  padding-top: 2px;
+}
+
+.builder-result-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.builder-result-head span {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.generated-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.generated-card-grid article {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.generated-card-grid b {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+
+.generated-card-grid span,
+.generated-card-grid small {
+  overflow-wrap: anywhere;
+}
+
+.generated-card-grid small {
+  color: var(--muted);
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+
 #packageCardsInput {
   direction: ltr;
   text-align: left;
@@ -592,6 +685,8 @@
   .settings-grid,
   .bot-status-grid,
   .admin-grid,
+  .builder-head,
+  .generated-card-grid,
   .broadcast-users,
   .plan-actions,
   .plans-board,

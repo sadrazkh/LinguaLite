@@ -33,6 +33,10 @@ const elements = {
   packagePublishedInput: $("#packagePublishedInput"),
   packageDescriptionInput: $("#packageDescriptionInput"),
   packageCardsInput: $("#packageCardsInput"),
+  packageWordsInput: $("#packageWordsInput"),
+  packageWordsLevelInput: $("#packageWordsLevelInput"),
+  generatePackageCardsButton: $("#generatePackageCardsButton"),
+  packageGeneratedPreview: $("#packageGeneratedPreview"),
   savePackageButton: $("#savePackageButton"),
   newPackageButton: $("#newPackageButton"),
   packagesList: $("#packagesList"),
@@ -82,6 +86,7 @@ elements.botStatusButton.addEventListener("click", loadBotStatus);
 elements.addPlanButton.addEventListener("click", addPlan);
 elements.packageForm.addEventListener("submit", savePackage);
 elements.newPackageButton.addEventListener("click", resetPackageForm);
+elements.generatePackageCardsButton.addEventListener("click", generatePackageCards);
 elements.createCodeButton.addEventListener("click", createCode);
 elements.prevUsersPageButton.addEventListener("click", () => changeUsersPage(-1));
 elements.nextUsersPageButton.addEventListener("click", () => changeUsersPage(1));
@@ -631,6 +636,128 @@ function resetPackageForm() {
   elements.packagePublishedInput.checked = true;
   elements.packageSortInput.value = state.packages.length;
   elements.packageCardsInput.value = "[]";
+  elements.packageWordsInput.value = "";
+  elements.packageGeneratedPreview.hidden = true;
+  elements.packageGeneratedPreview.innerHTML = "";
+}
+
+async function generatePackageCards() {
+  const words = parsePackageWords();
+  if (words.length === 0) return showToast("حداقل یک کلمه وارد کن.");
+  if (words.length > 60) return showToast("برای هر بار حداکثر ۶۰ کلمه وارد کن.");
+
+  setButtonLoading(elements.generatePackageCardsButton, true, "در حال ساخت کارت‌ها...");
+  try {
+    const result = await adminFetch("/api/admin/packages/cards/complete", {
+      method: "POST",
+      body: JSON.stringify({
+        words,
+        languageLevel: elements.packageWordsLevelInput.value || "B1",
+        type: "Word"
+      })
+    });
+
+    const cards = arrayOf(result.cards);
+    const { added, skipped } = appendPackageCards(cards);
+    renderGeneratedPackagePreview(added, skipped);
+    if (added.length > 0) elements.packageWordsInput.value = "";
+    showToast(`${toPersianNumber(added.length)} کارت اضافه شد · ${toPersianNumber(skipped)} تکراری/نامعتبر`);
+  } catch (error) {
+    showToast(error.message || "ساخت کارت‌های بسته انجام نشد.");
+  } finally {
+    setButtonLoading(elements.generatePackageCardsButton, false, "ساخت و افزودن کارت‌ها با AI");
+  }
+}
+
+function parsePackageWords() {
+  return elements.packageWordsInput.value
+    .split(/[\n,،;؛]+/g)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .filter((item, index, list) => list.findIndex(candidate => candidate.toLowerCase() === item.toLowerCase()) === index);
+}
+
+function appendPackageCards(cards) {
+  const current = readPackageCardsInput();
+  const existingIds = new Set(current.map(card => String(card.id || "").toLowerCase()).filter(Boolean));
+  const existingCards = new Set(current.map(packageCardKey));
+  const added = [];
+  let skipped = 0;
+
+  for (const rawCard of cards) {
+    const card = normalizePackageCard(rawCard);
+    if (!card.front || !card.back) {
+      skipped++;
+      continue;
+    }
+
+    const key = packageCardKey(card);
+    const id = String(card.id || "").toLowerCase();
+    if ((id && existingIds.has(id)) || existingCards.has(key)) {
+      skipped++;
+      continue;
+    }
+
+    existingIds.add(id);
+    existingCards.add(key);
+    current.push(card);
+    added.push(card);
+  }
+
+  elements.packageCardsInput.value = JSON.stringify(current, null, 2);
+  return { added, skipped };
+}
+
+function readPackageCardsInput() {
+  try {
+    const cards = JSON.parse(elements.packageCardsInput.value || "[]");
+    if (!Array.isArray(cards)) throw new Error("cards json must be array");
+    return cards;
+  } catch {
+    throw new Error("اول JSON کارت‌های بسته را معتبر کن.");
+  }
+}
+
+function normalizePackageCard(card = {}) {
+  const front = String(card.front || "").trim();
+  const id = String(card.id || slugify(front)).trim();
+  return {
+    id: slugify(id || front),
+    front,
+    back: String(card.back || "").trim(),
+    example: String(card.example || "").trim(),
+    prompt: String(card.prompt || "").trim(),
+    answer: String(card.answer || "").trim(),
+    notes: String(card.notes || "").trim(),
+    type: card.type || "Word"
+  };
+}
+
+function packageCardKey(card) {
+  return `${card.type || "Word"}:${normalizePackageText(card.front)}`;
+}
+
+function normalizePackageText(value) {
+  return String(value || "").trim().toLowerCase().replace(/\s+/g, "");
+}
+
+function renderGeneratedPackagePreview(added, skipped) {
+  elements.packageGeneratedPreview.hidden = false;
+  elements.packageGeneratedPreview.innerHTML = `
+    <div class="builder-result-head">
+      <strong>${toPersianNumber(added.length)} کارت تازه آماده شد</strong>
+      <span>${toPersianNumber(skipped)} مورد تکراری یا نامعتبر رد شد</span>
+    </div>
+    <div class="generated-card-grid">
+      ${added.slice(0, 8).map(card => `
+        <article>
+          <b>${escapeHtml(card.front)}</b>
+          <span>${escapeHtml(card.back)}</span>
+          <small>${escapeHtml(card.example || card.prompt || "")}</small>
+        </article>
+      `).join("") || "<p>کارت تازه‌ای اضافه نشد.</p>"}
+    </div>
+  `;
 }
 
 async function savePackage(event) {

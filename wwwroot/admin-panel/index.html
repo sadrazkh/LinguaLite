@@ -90,6 +90,28 @@
             <label class="check-row"><input id="packagePublishedInput" type="checkbox" checked> <span>منتشر شده</span></label>
           </div>
           <label><span>توضیح بسته</span><textarea id="packageDescriptionInput" rows="2" placeholder="توضیح کوتاه برای کاربر"></textarea></label>
+          <section class="package-ai-builder">
+            <div class="builder-head">
+              <div>
+                <strong>سازنده هوشمند کارت‌های بسته</strong>
+                <span>یک کلمه یا چند کلمه بده؛ کارت‌ها با همان ساختار لایتنر ساخته و به JSON بسته اضافه می‌شوند.</span>
+              </div>
+              <select id="packageWordsLevelInput" aria-label="سطح مثال‌ها">
+                <option value="A1">A1</option>
+                <option value="A2">A2</option>
+                <option value="B1" selected>B1</option>
+                <option value="B2">B2</option>
+                <option value="C1">C1</option>
+                <option value="C2">C2</option>
+              </select>
+            </div>
+            <textarea class="mixed-input package-words-input" id="packageWordsInput" rows="4" spellcheck="false" placeholder="ancestor&#10;include&#10;improve&#10;focus"></textarea>
+            <div class="tool-row">
+              <button class="secondary-button" id="generatePackageCardsButton" type="button">ساخت و افزودن کارت‌ها با AI</button>
+              <span class="builder-note">هر خط، ویرگول یا ; یک کلمه جدا حساب می‌شود.</span>
+            </div>
+            <div class="package-generated-preview" id="packageGeneratedPreview" hidden></div>
+          </section>
           <label><span>کارت‌ها JSON</span><textarea class="mixed-input" id="packageCardsInput" rows="9" spellcheck="false" placeholder='[{"id":"ability","front":"ability","back":"توانایی","example":"She has the ability...","prompt":"What does ability mean?","answer":"توانایی","notes":"...","type":"Word"}]'></textarea></label>
           <div class="tool-row">
             <button class="primary-button" id="savePackageButton" type="submit">ذخیره بسته</button>
