@@ -1,8 +1,9 @@
-const CACHE_NAME = "lingualite-v6";
+const CACHE_NAME = "lingualite-v7";
 const CORE_ASSETS = [
   "/",
   "/index.html",
   "/styles.css",
+  "/offline-store.js",
   "/app.js",
   "/manifest.webmanifest",
   "/icons/lingualite-logo.png"

@@ -179,15 +179,22 @@ api.MapPost("/cards", async (HttpContext http, IConfiguration config, CreateCard
         return Results.BadRequest(new { message = "روی کارت و پشت کارت را کامل وارد کنید." });
     }
 
+    var deck = await store.GetDeckAsync(profile.Id);
+    if (request.ClientId is { } clientId)
+    {
+        var existing = deck.Cards.FirstOrDefault(card => card.Id == clientId);
+        if (existing is not null) return Results.Ok(FeedbackCardPresenter.ToReviewShape(existing));
+    }
+
     var plan = await store.GetEffectivePlanAsync(profile.Plan);
-    if (!profile.Features.UnlimitedCards && plan.CardLimit > -1 && (await store.GetDeckAsync(profile.Id)).Cards.Count(card => !card.IsArchived) >= plan.CardLimit)
+    if (!profile.Features.UnlimitedCards && plan.CardLimit > -1 && deck.Cards.Count(card => !card.IsArchived) >= plan.CardLimit)
     {
         return Results.BadRequest(new { message = "سقف تعداد کارت‌های این پلن پر شده است." });
     }
 
     var card = new FlashCard
     {
-        Id = Guid.NewGuid(),
+        Id = request.ClientId ?? Guid.NewGuid(),
         Front = request.Front.Trim(),
         Back = request.Back.Trim(),
         Example = request.Example?.Trim() ?? string.Empty,
@@ -277,6 +284,41 @@ api.MapPost("/cards/{id:guid}/review", async (
 
     await store.RecordActivityAsync(profile.Id, ActivityKind.Review);
     return Results.Ok(card);
+});
+
+api.MapPut("/cards/{id:guid}/progress", async (
+    HttpContext http,
+    IConfiguration config,
+    Guid id,
+    SyncCardProgressRequest request,
+    IAppStore store) =>
+{
+    var profile = await RequireUserAsync(http, config, store);
+    if (profile is null) return Results.Unauthorized();
+    if (request.Box is < 1 or > 5 || request.TotalReviews < 0 || request.CorrectReviews < 0
+        || request.CorrectReviews > request.TotalReviews)
+    {
+        return Results.BadRequest(new { message = "وضعیت مرور کارت معتبر نیست." });
+    }
+
+    var applied = false;
+    var card = await store.UpdateCardAsync(profile.Id, id, item =>
+    {
+        item.TotalReviews = Math.Max(item.TotalReviews, request.TotalReviews);
+        item.CorrectReviews = Math.Min(item.TotalReviews, Math.Max(item.CorrectReviews, request.CorrectReviews));
+
+        if (item.LastReviewedAt is null || request.LastReviewedAt > item.LastReviewedAt)
+        {
+            applied = true;
+            item.Box = request.Box;
+            item.LastReviewedAt = request.LastReviewedAt.ToUniversalTime();
+            item.NextReviewAt = request.NextReviewAt.ToUniversalTime();
+        }
+    });
+
+    if (card is null) return Results.NotFound(new { message = "کارت پیدا نشد." });
+    if (applied) await store.RecordActivityAsync(profile.Id, ActivityKind.Review);
+    return Results.Ok(FeedbackCardPresenter.ToReviewShape(card));
 });
 
 api.MapPost("/cards/{id:guid}/archive", async (

@@ -22,13 +22,16 @@ const state = {
   config: null,
   editingCardId: null,
   dictionary: null,
-  correction: null
+  correction: null,
+  offline: !navigator.onLine,
+  syncPromise: null
 };
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
   profileText: $("#profileText"),
   planBadge: $("#planBadge"),
+  connectionStatus: $("#connectionStatus"),
   accountStatusText: $("#accountStatusText"),
   modelText: $("#modelText"),
   dueCards: $("#dueCards"),
@@ -218,6 +221,17 @@ bindEvents();
 loadSettings();
 registerPwa();
 updateCardMode();
+updateConnectionStatus();
+window.addEventListener("offline", () => {
+  state.offline = true;
+  updateConnectionStatus();
+  showToast("اینترنت قطع شد؛ تغییرات روی همین دستگاه ذخیره می‌شوند.");
+});
+window.addEventListener("online", () => {
+  state.offline = false;
+  updateConnectionStatus("syncing");
+  synchronizeAndReload();
+});
 loadAll();
 
 function bindEvents() {
@@ -291,8 +305,10 @@ function applyThemeMode(mode) {
 
 async function loadAll() {
   try {
-    const [config, summary, due, cards, archivedCards, packages] = await Promise.all([
-      fetchJson("/api/config"),
+    const config = await fetchJson("/api/config");
+    LinguaOffline.setAccount(config.userId);
+    if (navigator.onLine) await syncPendingChanges();
+    const [summary, due, cards, archivedCards, packages] = await Promise.all([
       fetchJson("/api/deck"),
       fetchJson("/api/cards/due"),
       fetchJson("/api/cards"),
@@ -300,28 +316,57 @@ async function loadAll() {
       fetchJson("/api/packages")
     ]);
 
-    state.config = config;
-    document.body.classList.remove("auth-required");
-    elements.authGate.hidden = true;
-    state.due = due;
-    state.cards = cards;
-    state.archivedCards = archivedCards;
-    state.packages = packages;
-    renderProfile(config);
-    renderUserInfo(config);
-    updateSummary(summary);
-    renderQuota(config);
-    renderBoxes(summary.boxes);
-    renderDeckSection();
-    pickNextCard();
+    applyLoadedData({ config, summary, due, cards, archivedCards, packages });
+    await LinguaOffline.saveSnapshot({ config, cards, archivedCards, packages });
+    state.offline = false;
+    updateConnectionStatus();
   } catch (error) {
     if (error.status === 401) {
       await showAuthGate();
       return;
     }
+    const snapshot = await LinguaOffline.loadSnapshot().catch(() => null);
+    if (snapshot) {
+      state.offline = true;
+      applyOfflineSnapshot(snapshot);
+      updateConnectionStatus();
+      showToast("نسخه آفلاین کارت‌ها باز شد.");
+      return;
+    }
     showLoadError(error);
     showToast(error.message || "دریافت اطلاعات انجام نشد.");
   }
+}
+
+function applyLoadedData({ config, summary, due, cards, archivedCards, packages }) {
+  state.config = config;
+  document.body.classList.remove("auth-required");
+  elements.authGate.hidden = true;
+  state.due = due;
+  state.cards = cards;
+  state.archivedCards = archivedCards;
+  state.packages = packages;
+  renderProfile(config);
+  renderUserInfo(config);
+  updateSummary(summary);
+  renderQuota(config);
+  renderBoxes(summary.boxes);
+  renderDeckSection();
+  pickNextCard();
+}
+
+function applyOfflineSnapshot(snapshot) {
+  const cards = snapshot.cards || [];
+  const archivedCards = snapshot.archivedCards || [];
+  const summary = offlineSummary(cards);
+  applyLoadedData({
+    config: snapshot.config,
+    summary,
+    due: offlineDueCards(cards),
+    cards,
+    archivedCards,
+    packages: snapshot.packages || []
+  });
 }
 
 async function refreshApp() {
@@ -573,24 +618,21 @@ function revealCurrentCard() {
 
 async function reviewCurrent(remembered) {
   if (!state.current) return;
-  try {
-    await fetchJson(`/api/cards/${state.current.id}/review`, {
-      method: "POST",
-      body: JSON.stringify({ remembered })
-    });
-    showToast(remembered ? "رفت جعبه بعدی." : "برای مرور دوباره برگشت.");
-    await loadAll();
-  } catch (error) {
-    showToast(error.message || "ثبت مرور انجام نشد.");
-  }
+  await reviewCardOffline(state.current, remembered);
+  if (navigator.onLine) await synchronizeAndReload();
 }
 
 async function saveCard(event) {
   event.preventDefault();
   const payload = Object.fromEntries(new FormData(elements.form).entries());
   const isEdit = Boolean(state.editingCardId);
+  if (!isEdit) payload.clientId = crypto.randomUUID();
   const url = isEdit ? `/api/cards/${state.editingCardId}` : "/api/cards";
   const method = isEdit ? "PUT" : "POST";
+  if (!navigator.onLine || state.offline) {
+    await saveCardOffline(payload, isEdit);
+    return;
+  }
   try {
     await fetchJson(url, { method, body: JSON.stringify(payload) });
     showToast(isEdit ? "کارت ویرایش شد." : "کارت اضافه شد.");
@@ -598,11 +640,16 @@ async function saveCard(event) {
     await loadAll();
     switchView(isEdit ? "deck" : "review");
   } catch (error) {
+    if (shouldUseOffline(error)) {
+      await saveCardOffline(payload, isEdit);
+      return;
+    }
     showToast(error.message || "کارت ذخیره نشد.");
   }
 }
 
 async function completeWithAi() {
+  if (!navigator.onLine || state.offline) return showToast("تکمیل با AI به اینترنت نیاز دارد.");
   if (!hasFeature("ai")) return planLocked("کارت‌سازی با AI");
   const type = getSelectedType();
   if (type === "Feedback" && !hasFeature("feedbackCards")) return planLocked("کارت فیدبک");
@@ -629,6 +676,7 @@ async function completeWithAi() {
 }
 
 async function lookupDictionary() {
+  if (!navigator.onLine || state.offline) return showToast("دیکشنری هوشمند به اینترنت نیاز دارد.");
   if (!hasFeature("dictionary")) return planLocked("دیکشنری هوشمند");
   const text = elements.dictionaryInput.value.trim();
   if (!text) return showToast("کلمه یا عبارت را وارد کن.");
@@ -675,18 +723,20 @@ function renderDictionaryResult(result) {
 async function addDictionaryToDeck() {
   const result = state.dictionary;
   if (!result) return;
+  const payload = {
+    type: "Word",
+    front: result.word,
+    back: [result.persianMeaning, result.englishDefinition].filter(Boolean).join("\n\n"),
+    example: arrayOf(result.examples)[0] || "",
+    prompt: `What does "${result.word}" mean?`,
+    answer: result.persianMeaning || result.englishDefinition || "",
+    notes: result.notes || ""
+  };
+  if (!navigator.onLine || state.offline) return saveCardOffline(payload, false);
   try {
     await fetchJson("/api/cards", {
       method: "POST",
-      body: JSON.stringify({
-        type: "Word",
-        front: result.word,
-        back: [result.persianMeaning, result.englishDefinition].filter(Boolean).join("\n\n"),
-        example: arrayOf(result.examples)[0] || "",
-        prompt: `What does "${result.word}" mean?`,
-        answer: result.persianMeaning || result.englishDefinition || "",
-        notes: result.notes || ""
-      })
+      body: JSON.stringify(payload)
     });
     showToast("از دیکشنری به لایتنر اضافه شد.");
     await loadAll();
@@ -696,6 +746,7 @@ async function addDictionaryToDeck() {
 }
 
 async function correctText() {
+  if (!navigator.onLine || state.offline) return showToast("اصلاح هوشمند متن به اینترنت نیاز دارد.");
   if (!hasFeature("textCorrection")) return planLocked("اصلاح متن");
   const text = elements.correctionInput.value.trim();
   if (!text) return showToast("جمله یا متن را وارد کن.");
@@ -754,18 +805,20 @@ function renderCorrectionResult(result) {
 async function addCorrectionToFeedback() {
   const result = state.correction;
   if (!result) return;
+  const payload = {
+    type: "Feedback",
+    front: `wrong: ${result.original} -> correct: ${result.corrected}`,
+    back: result.overallNote || "",
+    example: result.corrected || "",
+    prompt: `Correct this sentence: ${result.original}`,
+    answer: result.corrected || "",
+    notes: arrayOf(result.issues).map(item => `${item.original} -> ${item.corrected}: ${item.reason}`).join("\n")
+  };
+  if (!navigator.onLine || state.offline) return saveCardOffline(payload, false);
   try {
     await fetchJson("/api/cards", {
       method: "POST",
-      body: JSON.stringify({
-        type: "Feedback",
-        front: `wrong: ${result.original} -> correct: ${result.corrected}`,
-        back: result.overallNote || "",
-        example: result.corrected || "",
-        prompt: `Correct this sentence: ${result.original}`,
-        answer: result.corrected || "",
-        notes: arrayOf(result.issues).map(item => `${item.original} -> ${item.corrected}: ${item.reason}`).join("\n")
-      })
+      body: JSON.stringify(payload)
     });
     showToast("به کارت‌های فیدبک اضافه شد.");
     await loadAll();
@@ -842,6 +895,7 @@ function saveSettings(event) {
 
 async function redeemCode(event) {
   event.preventDefault();
+  if (!navigator.onLine || state.offline) return showToast("فعال‌سازی کد به اینترنت نیاز دارد.");
   const code = elements.redeemCodeInput.value.trim();
   if (!code) return showToast("کد فعال‌سازی را وارد کن.");
   setButtonLoading(elements.redeemCodeButton, true, "در حال فعال‌سازی...");
@@ -1069,6 +1123,10 @@ function startEditCard(id) {
 }
 
 async function archiveCard(id, archived) {
+  if (!navigator.onLine || state.offline) {
+    await archiveCardOffline(id, archived);
+    return;
+  }
   try {
     await fetchJson(`/api/cards/${id}/archive`, {
       method: "POST",
@@ -1077,11 +1135,16 @@ async function archiveCard(id, archived) {
     showToast(archived ? "کارت آرشیو شد." : "کارت به لیست فعال برگشت.");
     await loadAll();
   } catch (error) {
+    if (shouldUseOffline(error)) {
+      await archiveCardOffline(id, archived);
+      return;
+    }
     showToast(error.message || "تغییر وضعیت کارت انجام نشد.");
   }
 }
 
 async function importPackage(item) {
+  if (!navigator.onLine || state.offline) return showToast("دریافت بسته به اینترنت نیاز دارد.");
   const id = item.dataset.packageId;
   const count = Number(item.querySelector("input")?.value || 10);
   const button = item.querySelector('[data-action="import-package"]');
@@ -1112,13 +1175,261 @@ function packagePercent(item) {
 async function deleteCard(id) {
   const ok = confirm("این کارت حذف شود؟");
   if (!ok) return;
+  if (!navigator.onLine || state.offline) {
+    await deleteCardOffline(id);
+    return;
+  }
   try {
     await fetchJson(`/api/cards/${id}`, { method: "DELETE" });
     showToast("کارت حذف شد.");
     await loadAll();
   } catch (error) {
+    if (shouldUseOffline(error)) {
+      await deleteCardOffline(id);
+      return;
+    }
     showToast(error.message || "حذف کارت انجام نشد.");
   }
+}
+
+async function saveCardOffline(payload, isEdit) {
+  if (!state.config) return showToast("برای اولین استفاده، یک بار برنامه را آنلاین باز کن.");
+
+  if (isEdit) {
+    const card = [...state.cards, ...state.archivedCards].find((item) => item.id === state.editingCardId);
+    if (!card) return showToast("کارت در حافظه آفلاین پیدا نشد.");
+    Object.assign(card, normalizeCardPayload(payload));
+    await queueOfflineOperation({
+      method: "PUT",
+      url: `/api/cards/${card.id}`,
+      body: normalizeCardPayload(payload)
+    });
+  } else {
+    const limit = Number(state.config.effectivePlan?.cardLimit ?? -1);
+    if (!state.config.features?.unlimitedCards && limit > -1 && state.cards.length >= limit) {
+      return showToast("سقف کارت‌های پلن فعلی پر شده است؛ برای افزودن کارت باید پلن را ارتقا بدهی.");
+    }
+    const id = payload.clientId || crypto.randomUUID();
+    const card = {
+      id,
+      ...normalizeCardPayload(payload),
+      box: 1,
+      totalReviews: 0,
+      correctReviews: 0,
+      createdAt: new Date().toISOString(),
+      nextReviewAt: utcDateIso(new Date()),
+      lastReviewedAt: null,
+      isArchived: false,
+      sourcePackageId: "",
+      sourcePackageCardId: ""
+    };
+    state.cards.unshift(card);
+    await queueOfflineOperation({
+      method: "POST",
+      url: "/api/cards",
+      body: { ...normalizeCardPayload(payload), clientId: id }
+    });
+  }
+
+  await persistAndRenderOffline();
+  resetCardForm();
+  switchView(isEdit ? "deck" : "review");
+  showToast(isEdit
+    ? "ویرایش روی دستگاه ذخیره شد و بعداً سینک می‌شود."
+    : "کارت روی دستگاه ذخیره شد و بعداً سینک می‌شود.");
+}
+
+async function reviewCardOffline(card, remembered) {
+  const now = new Date();
+  card.totalReviews = Number(card.totalReviews || 0) + 1;
+  if (remembered) {
+    card.correctReviews = Number(card.correctReviews || 0) + 1;
+    card.box = Math.min(5, Number(card.box || 1) + 1);
+  } else {
+    card.box = 1;
+  }
+  card.lastReviewedAt = now.toISOString();
+  card.nextReviewAt = addUtcDays(utcDateIso(now), offlineDelayDays(card.box));
+
+  await queueOfflineOperation({
+    method: "PUT",
+    url: `/api/cards/${card.id}/progress`,
+    body: {
+      box: card.box,
+      totalReviews: card.totalReviews,
+      correctReviews: card.correctReviews,
+      lastReviewedAt: card.lastReviewedAt,
+      nextReviewAt: card.nextReviewAt
+    }
+  });
+  await persistAndRenderOffline();
+  showToast(remembered
+    ? "مرور آفلاین ثبت شد؛ کارت به جعبه بعد رفت."
+    : "مرور آفلاین ثبت شد؛ کارت به جعبه اول برگشت.");
+}
+
+async function archiveCardOffline(id, archived) {
+  const source = archived ? state.cards : state.archivedCards;
+  const target = archived ? state.archivedCards : state.cards;
+  const index = source.findIndex((item) => item.id === id);
+  if (index < 0) return showToast("کارت در حافظه آفلاین پیدا نشد.");
+  const [card] = source.splice(index, 1);
+  card.isArchived = archived;
+  target.unshift(card);
+  await queueOfflineOperation({
+    method: "POST",
+    url: `/api/cards/${id}/archive`,
+    body: { archived }
+  });
+  await persistAndRenderOffline();
+  showToast(archived ? "کارت آفلاین آرشیو شد." : "کارت آفلاین فعال شد.");
+}
+
+async function deleteCardOffline(id) {
+  state.cards = state.cards.filter((item) => item.id !== id);
+  state.archivedCards = state.archivedCards.filter((item) => item.id !== id);
+  await queueOfflineOperation({ method: "DELETE", url: `/api/cards/${id}` });
+  await persistAndRenderOffline();
+  showToast("حذف روی دستگاه ثبت شد و بعداً سینک می‌شود.");
+}
+
+function normalizeCardPayload(payload) {
+  return {
+    front: String(payload.front || "").trim(),
+    back: String(payload.back || "").trim(),
+    example: String(payload.example || "").trim(),
+    prompt: String(payload.prompt || "").trim(),
+    answer: String(payload.answer || "").trim(),
+    notes: String(payload.notes || "").trim(),
+    type: payload.type || "Word"
+  };
+}
+
+async function queueOfflineOperation(operation) {
+  await LinguaOffline.enqueue(operation);
+  state.offline = true;
+  updateConnectionStatus();
+  if (navigator.onLine) {
+    clearTimeout(queueOfflineOperation.retryTimer);
+    queueOfflineOperation.retryTimer = setTimeout(synchronizeAndReload, 5000);
+  }
+}
+
+async function persistAndRenderOffline() {
+  const snapshot = {
+    config: state.config,
+    cards: state.cards,
+    archivedCards: state.archivedCards,
+    packages: state.packages
+  };
+  await LinguaOffline.saveSnapshot(snapshot);
+  applyOfflineSnapshot(snapshot);
+}
+
+function offlineSummary(cards) {
+  const totalReviews = cards.reduce((sum, card) => sum + Number(card.totalReviews || 0), 0);
+  const correctReviews = cards.reduce((sum, card) => sum + Number(card.correctReviews || 0), 0);
+  const boxes = {};
+  for (let box = 1; box <= 5; box += 1) {
+    boxes[box] = cards.filter((card) => Number(card.box) === box).length;
+  }
+  return {
+    totalCards: cards.length,
+    dueCards: offlineDueCards(cards).length,
+    learnedCards: cards.filter((card) => Number(card.box) >= 4).length,
+    accuracy: totalReviews ? Math.round((correctReviews / totalReviews) * 1000) / 10 : 0,
+    boxes
+  };
+}
+
+function offlineDueCards(cards) {
+  const today = utcDateIso(new Date());
+  return cards
+    .filter((card) => !card.isArchived && (!card.nextReviewAt || card.nextReviewAt.slice(0, 10) <= today.slice(0, 10)))
+    .sort((left, right) => String(left.nextReviewAt).localeCompare(String(right.nextReviewAt)))
+    .slice(0, 25);
+}
+
+function offlineDelayDays(box) {
+  if (box <= 2) return 1;
+  if (box === 3) return 3;
+  if (box === 4) return 7;
+  return 30;
+}
+
+function utcDateIso(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())).toISOString();
+}
+
+function addUtcDays(value, days) {
+  const date = new Date(value);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString();
+}
+
+function shouldUseOffline(error) {
+  return !navigator.onLine || error instanceof TypeError || error?.network === true;
+}
+
+async function syncPendingChanges() {
+  if (!navigator.onLine || !LinguaOffline.currentAccount()) return;
+  const operations = await LinguaOffline.pending();
+  if (!operations.length) return;
+
+  updateConnectionStatus("syncing");
+  for (const operation of operations) {
+    try {
+      await fetchJson(operation.url, {
+        method: operation.method,
+        body: operation.body === undefined ? undefined : JSON.stringify(operation.body)
+      });
+      await LinguaOffline.remove(operation.id);
+    } catch (error) {
+      if (error.status === 404 && ["DELETE", "PUT", "POST"].includes(operation.method)) {
+        await LinguaOffline.remove(operation.id);
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+async function synchronizeAndReload() {
+  if (state.syncPromise) return state.syncPromise;
+  state.syncPromise = (async () => {
+    try {
+      await syncPendingChanges();
+      await loadAll();
+      showToast("تغییرات آفلاین با حساب شما همگام شد.");
+    } catch {
+      state.offline = true;
+      updateConnectionStatus();
+      showToast("سینک هنوز کامل نشده؛ دوباره تلاش می‌کنیم.");
+    } finally {
+      state.syncPromise = null;
+    }
+  })();
+  return state.syncPromise;
+}
+
+function updateConnectionStatus(mode = state.offline || !navigator.onLine ? "offline" : "online") {
+  const status = elements.connectionStatus;
+  if (!status) return;
+  status.classList.toggle("offline", mode === "offline");
+  status.classList.toggle("syncing", mode === "syncing");
+  status.textContent = mode === "syncing" ? "در حال سینک" : mode === "offline" ? "آفلاین" : "آنلاین";
+
+  if (mode === "offline") {
+    LinguaOffline.pending().then((items) => {
+      if (items.length) status.textContent = `آفلاین · ${toPersianNumber(items.length)}`;
+    }).catch(() => {});
+  }
+
+  const disableOnlineTools = mode !== "online";
+  elements.completeAiButton.disabled = disableOnlineTools;
+  elements.dictionaryButton.disabled = disableOnlineTools;
+  elements.correctionButton.disabled = disableOnlineTools;
+  if (!disableOnlineTools && state.config) renderQuota(state.config);
 }
 
 async function fetchJson(url, options = {}) {
@@ -1131,7 +1442,13 @@ async function fetchJson(url, options = {}) {
   }
   if (tg?.initData) headers.set("X-Telegram-Init-Data", tg.initData);
 
-  const response = await fetch(url, { ...options, headers });
+  let response;
+  try {
+    response = await fetch(url, { ...options, headers });
+  } catch (error) {
+    error.network = true;
+    throw error;
+  }
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     const failure = new Error(error.message || "درخواست ناموفق بود.");
@@ -1143,6 +1460,11 @@ async function fetchJson(url, options = {}) {
 
 function registerPwa() {
   if (!("serviceWorker" in navigator)) return;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (sessionStorage.getItem("lingualite.pwaReloaded") === "1") return;
+    sessionStorage.setItem("lingualite.pwaReloaded", "1");
+    window.location.reload();
+  });
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/service-worker.js").then((registration) => {
       registration.update().catch(() => {});

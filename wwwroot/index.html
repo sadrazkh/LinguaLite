@@ -27,6 +27,7 @@
         </div>
       </div>
       <div class="header-actions">
+        <span class="connection-status" id="connectionStatus" role="status">آنلاین</span>
         <span class="plan-badge" id="planBadge">Free</span>
         <button class="icon-button" id="refreshButton" type="button" aria-label="تازه‌سازی">↻</button>
       </div>
@@ -314,6 +315,7 @@
   </main>
 
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/offline-store.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

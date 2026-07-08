@@ -388,7 +388,7 @@ public sealed record UserIdentity(
 }
 
 public sealed record TelegramUser(string Id, string Name, string Username);
-public sealed record CreateCardRequest(string Front, string Back, string? Example, string? Prompt, string? Answer, string? Notes, CardType Type = CardType.Word);
+public sealed record CreateCardRequest(string Front, string Back, string? Example, string? Prompt, string? Answer, string? Notes, CardType Type = CardType.Word, Guid? ClientId = null);
 public sealed record AiCompleteRequest(string Text, CardType? Type, string? LanguageLevel = null);
 public sealed record DictionaryRequest(string Text, string? LanguageLevel = null);
 public sealed record CorrectionRequest(string Text, string? LanguageLevel = null);
@@ -396,6 +396,7 @@ public sealed record DictionaryResult(string Word, string Pronunciation, string 
 public sealed record CorrectionIssue(string Original, string Corrected, string Reason, string Severity);
 public sealed record CorrectionResult(string Original, string Corrected, string PersianTranslation, string OverallNote, CorrectionIssue[] Issues, string[] BetterAlternatives);
 public sealed record ReviewRequest(bool Remembered);
+public sealed record SyncCardProgressRequest(int Box, int TotalReviews, int CorrectReviews, DateTimeOffset LastReviewedAt, DateTimeOffset NextReviewAt);
 public sealed record ImportRequest(List<FlashCard> Cards, ImportMode Mode = ImportMode.Merge);
 public sealed record ExportPayload(string UserId, DateTimeOffset ExportedAt, List<FlashCard> Cards);
 public sealed record RedeemCodeRequest(string Code);
