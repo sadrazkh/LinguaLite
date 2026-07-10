@@ -318,11 +318,14 @@ function renderUsers() {
           <strong>${escapeHtml(user.displayName || user.id)}</strong>
           <small>${escapeHtml(user.id)} · tg:${escapeHtml(user.telegramId || "-")} · @${escapeHtml(user.telegramUsername || "-")}</small>
           <small>${escapeHtml(user.source)} · <b class="inline-badge" style="background:${safeColor(plan?.badgeColor, "#16a34a")};color:${safeColor(plan?.badgeTextColor, "#ffffff")}">${escapeHtml(user.plan)}</b> · سطح ${escapeHtml(user.languageLevel || "B1")} · ${user.isActive ? "فعال" : "غیرفعال"} · کد: ${escapeHtml(user.accessCode || "-")} · ${escapeHtml(featureSummary(user.features))}</small>
+          <small>آخرین فعالیت: ${escapeHtml(formatAdminDate(user.lastSeenAt))} · عضویت: ${escapeHtml(formatAdminDate(user.createdAt))}</small>
           <div class="user-metrics">
-            <span>کارت: ${toPersianNumber(metrics.totalCards)}</span>
+            <span>کل کارت‌ها: ${toPersianNumber(metrics.totalCards)}</span>
+            <span>فعال: ${toPersianNumber(metrics.activeCards)}</span>
+            <span>آرشیو: ${toPersianNumber(metrics.archivedCards)}</span>
             <span>مرور آماده: ${toPersianNumber(metrics.dueCards)}</span>
             <span>فعالیت امروز: ${toPersianNumber(metrics.activeMinutesToday)} دقیقه</span>
-            <span>درخواست امروز: ${toPersianNumber(metrics.requestsToday)}</span>
+            <span>درخواست API امروز: ${toPersianNumber(metrics.requestsToday)}</span>
             <span>افزوده امروز: ${toPersianNumber(metrics.cardsAddedToday)}</span>
             <span>مرور امروز: ${toPersianNumber(metrics.reviewsToday)}</span>
             <span>AI کارت: ${toPersianNumber(metrics.aiCardToday)}</span>
@@ -1060,6 +1063,8 @@ function findPlan(nameOrId) {
 function findMetrics(userId) {
   return state.metrics.find(item => item.userId === userId) || {
     totalCards: 0,
+    activeCards: 0,
+    archivedCards: 0,
     dueCards: 0,
     requestsToday: 0,
     activeMinutesToday: 0,

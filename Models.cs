@@ -115,6 +115,8 @@ public sealed class AdminUserMetrics
 {
     public string UserId { get; set; } = string.Empty;
     public int TotalCards { get; set; }
+    public int ActiveCards { get; set; }
+    public int ArchivedCards { get; set; }
     public int DueCards { get; set; }
     public int RequestsToday { get; set; }
     public int ActiveMinutesToday { get; set; }
@@ -402,6 +404,9 @@ public sealed record CorrectionIssue(string Original, string Corrected, string R
 public sealed record CorrectionResult(string Original, string Corrected, string PersianTranslation, string OverallNote, CorrectionIssue[] Issues, string[] BetterAlternatives);
 public sealed record ReviewRequest(bool Remembered);
 public sealed record SyncCardProgressRequest(int Box, int TotalReviews, int CorrectReviews, DateTimeOffset LastReviewedAt, DateTimeOffset NextReviewAt);
+public sealed record SyncCardProgressItem(Guid Id, int Box, int TotalReviews, int CorrectReviews, DateTimeOffset LastReviewedAt, DateTimeOffset NextReviewAt);
+public sealed record SyncCardProgressBatchRequest(List<SyncCardProgressItem> Items);
+public sealed record SyncCardProgressBatchResult(int Requested, int Applied);
 public sealed record ImportRequest(List<FlashCard> Cards, ImportMode Mode = ImportMode.Merge);
 public sealed record ExportPayload(string UserId, DateTimeOffset ExportedAt, List<FlashCard> Cards);
 public sealed record RedeemCodeRequest(string Code);

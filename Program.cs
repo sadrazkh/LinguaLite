@@ -286,6 +286,31 @@ api.MapPost("/cards/{id:guid}/review", async (
     return Results.Ok(card);
 });
 
+api.MapPut("/cards/progress/batch", async (
+    HttpContext http,
+    IConfiguration config,
+    SyncCardProgressBatchRequest request,
+    IAppStore store) =>
+{
+    var profile = await RequireUserAsync(http, config, store);
+    if (profile is null) return Results.Unauthorized();
+    if (request.Items is null || request.Items.Count == 0)
+    {
+        return Results.BadRequest(new { message = "حداقل یک مرور برای همگام‌سازی لازم است." });
+    }
+    if (request.Items.Count > 50 || request.Items.Any(item =>
+            item.Box is < 1 or > 5
+            || item.TotalReviews < 0
+            || item.CorrectReviews < 0
+            || item.CorrectReviews > item.TotalReviews))
+    {
+        return Results.BadRequest(new { message = "بستهٔ همگام‌سازی مرور معتبر نیست یا بیش از ۵۰ مورد دارد." });
+    }
+
+    var result = await store.SyncCardProgressBatchAsync(profile.Id, request.Items);
+    return Results.Ok(result);
+});
+
 api.MapPut("/cards/{id:guid}/progress", async (
     HttpContext http,
     IConfiguration config,

@@ -135,6 +135,44 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         });
     }
 
+    public async Task<SyncCardProgressBatchResult> SyncCardProgressBatchAsync(string userId, IReadOnlyCollection<SyncCardProgressItem> items)
+    {
+        var requested = items.Count;
+        return await MutateAsync(db =>
+        {
+            if (!db.Decks.TryGetValue(userId, out var deck)) return new SyncCardProgressBatchResult(requested, 0);
+            var latest = items
+                .GroupBy(item => item.Id)
+                .Select(group => group.MaxBy(item => item.LastReviewedAt)!)
+                .ToDictionary(item => item.Id);
+            var applied = 0;
+            foreach (var card in deck.Cards.Where(card => !card.IsArchived && latest.ContainsKey(card.Id)))
+            {
+                var progress = latest[card.Id];
+                card.TotalReviews = Math.Max(card.TotalReviews, progress.TotalReviews);
+                card.CorrectReviews = Math.Min(card.TotalReviews, Math.Max(card.CorrectReviews, progress.CorrectReviews));
+                if (card.LastReviewedAt is not null && progress.LastReviewedAt <= card.LastReviewedAt) continue;
+                card.Box = progress.Box;
+                card.LastReviewedAt = progress.LastReviewedAt.ToUniversalTime();
+                card.NextReviewAt = progress.NextReviewAt.ToUniversalTime();
+                applied++;
+            }
+            if (applied > 0)
+            {
+                var activity = GetTodayActivity(db, userId, ReportingClock.Today(configuration));
+                var now = DateTimeOffset.UtcNow;
+                var activeGap = now - activity.LastSeenAt;
+                if (activeGap >= TimeSpan.Zero && activeGap <= TimeSpan.FromMinutes(5))
+                {
+                    activity.ActiveSeconds += (int)Math.Floor(activeGap.TotalSeconds);
+                }
+                activity.LastSeenAt = now;
+                activity.Reviews += applied;
+            }
+            return new SyncCardProgressBatchResult(requested, applied);
+        });
+    }
+
     public async Task<bool> DeleteCardAsync(string userId, Guid cardId)
     {
         return await MutateAsync(db => db.Decks.TryGetValue(userId, out var deck) && deck.Cards.RemoveAll(card => card.Id == cardId) > 0);
@@ -482,8 +520,13 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
     {
         await MutateAsync(db =>
         {
-            var activity = GetTodayActivity(db, userId);
+            var activity = GetTodayActivity(db, userId, ReportingClock.Today(configuration));
             var now = DateTimeOffset.UtcNow;
+            var activeGap = now - activity.LastSeenAt;
+            if (activeGap >= TimeSpan.Zero && activeGap <= TimeSpan.FromMinutes(5))
+            {
+                activity.ActiveSeconds += (int)Math.Floor(activeGap.TotalSeconds);
+            }
             activity.LastSeenAt = now;
             activity.FirstSeenAt = activity.FirstSeenAt == default ? now : activity.FirstSeenAt;
             var safeCount = Math.Max(1, count);
@@ -515,7 +558,7 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
     public async Task<List<AdminUserMetrics>> GetAdminUserMetricsAsync()
     {
         var db = await LoadAsync();
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = ReportingClock.Today(configuration);
         return db.Users.Keys.Select(userId =>
         {
             db.Decks.TryGetValue(userId, out var deck);
@@ -525,7 +568,9 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
             return new AdminUserMetrics
             {
                 UserId = userId,
-                TotalCards = activeCards.Count,
+                TotalCards = deck?.Cards.Count ?? 0,
+                ActiveCards = activeCards.Count,
+                ArchivedCards = deck?.Cards.Count(card => card.IsArchived) ?? 0,
                 DueCards = dueCards,
                 RequestsToday = activity?.Requests ?? 0,
                 ActiveMinutesToday = ActiveMinutes(activity),
@@ -807,9 +852,8 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         _ => plan.AiMonthlyLimit
     };
 
-    private static LocalUserActivity GetTodayActivity(LocalAppDatabase db, string userId)
+    private static LocalUserActivity GetTodayActivity(LocalAppDatabase db, string userId, DateOnly today)
     {
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var activity = db.UserActivity.FirstOrDefault(item => item.UserId == userId && item.ActivityDate == today);
         if (activity is not null) return activity;
 
@@ -827,7 +871,7 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
     private static int ActiveMinutes(LocalUserActivity? activity)
     {
         if (activity is null) return 0;
-        var minutes = (int)Math.Ceiling((activity.LastSeenAt - activity.FirstSeenAt).TotalMinutes);
+        var minutes = (int)Math.Ceiling(activity.ActiveSeconds / 60d);
         return activity.Requests > 0 ? Math.Max(1, minutes) : Math.Max(0, minutes);
     }
 
@@ -963,6 +1007,7 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         public int AiCard { get; set; }
         public int AiDictionary { get; set; }
         public int AiCorrection { get; set; }
+        public int ActiveSeconds { get; set; }
     }
 
     private sealed class LocalBroadcastRecipient

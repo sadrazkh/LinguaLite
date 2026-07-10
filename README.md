@@ -8,6 +8,7 @@ LinguaLite یک مینی‌اپ تلگرام و PWA برای یادگیری زب
 
 ```powershell
 psql "$env:DATABASE_URL" -f DatabaseMigrations/20260710_performance_scalability.sql
+psql "$env:DATABASE_URL" -f DatabaseMigrations/20260710_admin_activity_accuracy.sql
 ```
 
 این migration indexهای cursor/due، summaryهای هر کاربر، bucketهای موعد و صف پایدار broadcast را می‌سازد و summary کاربران قبلی را فقط داخل PostgreSQL backfill می‌کند. روی دیتابیس بزرگ زمان اجرای آن به حجم کارت‌ها و I/O سرور وابسته است؛ به‌دلیل `CREATE INDEX CONCURRENTLY` نباید آن را داخل transaction یا migration runnerهای transaction-only اجرا کرد.
@@ -85,6 +86,7 @@ PUBLIC_BASE_URL=https://YOUR_DOMAIN
 TELEGRAM_MINI_APP_URL=https://YOUR_DOMAIN
 OPENROUTER_MODEL=google/gemma-4-31b-it:free
 OPENROUTER_REFERER=https://YOUR_DOMAIN
+REPORT_TIME_ZONE=Asia/Tehran
 ```
 
 ## Admin backup and bot control

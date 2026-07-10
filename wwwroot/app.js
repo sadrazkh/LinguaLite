@@ -29,7 +29,10 @@ const state = {
   dictionary: null,
   correction: null,
   offline: !navigator.onLine,
-  syncPromise: null
+  syncPromise: null,
+  reviewSyncPromise: null,
+  reviewSyncTimer: null,
+  queuedReviewsSinceFlush: 0
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -354,7 +357,7 @@ function applyLoadedData({ config, summary, due, cards, archivedCards, packages,
   state.config = config;
   document.body.classList.remove("auth-required");
   elements.authGate.hidden = true;
-  state.due = due;
+  state.due = [...(due || [])];
   state.cards = cards;
   state.archivedCards = archivedCards;
   state.summary = summary;
@@ -649,10 +652,13 @@ function revealCurrentCard() {
   tg?.HapticFeedback?.impactOccurred("light");
 }
 
-async function reviewCurrent(remembered) {
+function reviewCurrent(remembered) {
   if (!state.current) return;
-  await reviewCardOffline(state.current, remembered);
-  if (navigator.onLine) await synchronizeAndReload();
+  const card = state.current;
+  const progress = applyReviewOptimistically(card, remembered);
+  pickNextCard();
+  tg?.HapticFeedback?.impactOccurred(remembered ? "light" : "medium");
+  void persistReviewProgress(card.id, progress);
 }
 
 async function saveCard(event) {
@@ -1320,7 +1326,7 @@ async function saveCardOffline(payload, isEdit) {
     : "کارت روی دستگاه ذخیره شد و بعداً سینک می‌شود.");
 }
 
-async function reviewCardOffline(card, remembered) {
+function applyReviewOptimistically(card, remembered) {
   const before = { ...card };
   const now = new Date();
   card.totalReviews = Number(card.totalReviews || 0) + 1;
@@ -1334,21 +1340,71 @@ async function reviewCardOffline(card, remembered) {
   card.nextReviewAt = addUtcDays(utcDateIso(now), offlineDelayDays(card.box));
   applyOfflineSummaryDelta(before, card);
 
-  await queueOfflineOperation({
-    method: "PUT",
-    url: `/api/cards/${card.id}/progress`,
-    body: {
-      box: card.box,
-      totalReviews: card.totalReviews,
-      correctReviews: card.correctReviews,
-      lastReviewedAt: card.lastReviewedAt,
-      nextReviewAt: card.nextReviewAt
+  const listedCard = state.cards.find((item) => item.id === card.id);
+  if (listedCard && listedCard !== card) Object.assign(listedCard, card);
+
+  return {
+    box: card.box,
+    totalReviews: card.totalReviews,
+    correctReviews: card.correctReviews,
+    lastReviewedAt: card.lastReviewedAt,
+    nextReviewAt: card.nextReviewAt
+  };
+}
+
+async function persistReviewProgress(cardId, progress) {
+  try {
+    await LinguaOffline.enqueue({
+      method: "PUT",
+      url: `/api/cards/${cardId}/progress`,
+      body: progress
+    });
+    await cacheCurrentSnapshot();
+
+    if (navigator.onLine) {
+      state.queuedReviewsSinceFlush += 1;
+      scheduleReviewSync(state.queuedReviewsSinceFlush >= 10 ? 0 : 900);
+    } else {
+      state.offline = true;
+      updateConnectionStatus();
     }
-  });
-  await persistAndRenderOffline();
-  showToast(remembered
-    ? "مرور آفلاین ثبت شد؛ کارت به جعبه بعد رفت."
-    : "مرور آفلاین ثبت شد؛ کارت به جعبه اول برگشت.");
+  } catch (error) {
+    showToast(error.message || "ذخیرهٔ مرور روی دستگاه انجام نشد.");
+  }
+}
+
+function scheduleReviewSync(delay = 900) {
+  if (!navigator.onLine) return;
+  clearTimeout(state.reviewSyncTimer);
+  state.reviewSyncTimer = setTimeout(() => void flushReviewSync(), delay);
+}
+
+async function flushReviewSync() {
+  if (state.reviewSyncPromise) return state.reviewSyncPromise;
+  let failed = false;
+  state.reviewSyncPromise = (async () => {
+    try {
+      await syncPendingChanges(false);
+      const wasOffline = state.offline;
+      state.offline = false;
+      state.queuedReviewsSinceFlush = 0;
+      if (wasOffline) updateConnectionStatus("online");
+    } catch {
+      failed = true;
+      if (!navigator.onLine) {
+        state.offline = true;
+        updateConnectionStatus();
+      }
+    }
+  })();
+
+  try {
+    await state.reviewSyncPromise;
+  } finally {
+    state.reviewSyncPromise = null;
+    const remaining = await LinguaOffline.pending().catch(() => []);
+    if (remaining.length && navigator.onLine) scheduleReviewSync(failed ? 5000 : 0);
+  }
 }
 
 async function archiveCardOffline(id, archived) {
@@ -1508,13 +1564,24 @@ function shouldUseOffline(error) {
   return !navigator.onLine || error instanceof TypeError || error?.network === true;
 }
 
-async function syncPendingChanges() {
+async function syncPendingChanges(showStatus = true) {
   if (!navigator.onLine || !LinguaOffline.currentAccount()) return;
   const operations = await LinguaOffline.pending();
   if (!operations.length) return;
 
-  updateConnectionStatus("syncing");
-  for (const operation of operations) {
+  if (showStatus) updateConnectionStatus("syncing");
+  for (let index = 0; index < operations.length;) {
+    const operation = operations[index];
+    if (isCardProgressOperation(operation)) {
+      const progressOperations = [];
+      while (index < operations.length && progressOperations.length < 50 && isCardProgressOperation(operations[index])) {
+        progressOperations.push(operations[index]);
+        index += 1;
+      }
+      await syncProgressOperations(progressOperations);
+      continue;
+    }
+
     try {
       await fetchJson(operation.url, {
         method: operation.method,
@@ -1524,11 +1591,46 @@ async function syncPendingChanges() {
     } catch (error) {
       if (error.status === 404 && ["DELETE", "PUT", "POST"].includes(operation.method)) {
         await LinguaOffline.remove(operation.id);
+        index += 1;
         continue;
       }
       throw error;
     }
+    index += 1;
   }
+}
+
+function isCardProgressOperation(operation) {
+  return operation?.method === "PUT" && /^\/api\/cards\/[0-9a-f-]{36}\/progress$/i.test(operation.url || "");
+}
+
+async function syncProgressOperations(operations) {
+  const latestByCard = new Map();
+  for (const operation of operations) {
+    const id = operation.url.split("/")[3];
+    const current = latestByCard.get(id);
+    if (!current || Number(operation.createdAt || 0) >= Number(current.createdAt || 0)) {
+      latestByCard.set(id, operation);
+    }
+  }
+
+  const items = [...latestByCard.entries()].map(([id, operation]) => ({ id, ...operation.body }));
+  try {
+    await fetchJson("/api/cards/progress/batch", {
+      method: "PUT",
+      body: JSON.stringify({ items })
+    });
+  } catch (error) {
+    if (error.status !== 404) throw error;
+    for (const operation of operations) {
+      await fetchJson(operation.url, {
+        method: operation.method,
+        body: JSON.stringify(operation.body)
+      });
+    }
+  }
+
+  await Promise.all(operations.map((operation) => LinguaOffline.remove(operation.id)));
 }
 
 async function synchronizeAndReload() {

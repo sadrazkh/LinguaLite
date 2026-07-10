@@ -10,6 +10,7 @@ public interface IAppStore
     Task<DeckState> GetDeckAsync(string userId);
     Task AddCardAsync(string userId, FlashCard card);
     Task<FlashCard?> UpdateCardAsync(string userId, Guid cardId, Action<FlashCard> update);
+    Task<SyncCardProgressBatchResult> SyncCardProgressBatchAsync(string userId, IReadOnlyCollection<SyncCardProgressItem> items);
     Task<bool> DeleteCardAsync(string userId, Guid cardId);
     Task<int> ImportCardsAsync(string userId, List<FlashCard> cards, ImportMode mode);
     Task<List<UserProfile>> GetUsersAsync();

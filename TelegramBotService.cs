@@ -231,9 +231,11 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
             var active = users.Count(user => user.IsActive);
             var telegramConnected = users.Count(user => user.TelegramChatId.HasValue);
             var cards = metrics.Sum(metric => metric.TotalCards);
+            var activeCards = metrics.Sum(metric => metric.ActiveCards);
+            var archivedCards = metrics.Sum(metric => metric.ArchivedCards);
             var due = metrics.Sum(metric => metric.DueCards);
             await SendMessageAsync(chatId,
-                $"گزارش LinguaLite\nکاربران: {users.Count}\nفعال: {active}\nمتصل به ربات: {telegramConnected}\nکارت‌ها: {cards}\nموعد مرور: {due}",
+                $"گزارش LinguaLite\nکاربران: {users.Count}\nفعال: {active}\nمتصل به ربات: {telegramConnected}\nکل کارت‌ها: {cards}\nکارت فعال: {activeCards}\nآرشیو: {archivedCards}\nموعد مرور: {due}",
                 settings);
             return;
         }

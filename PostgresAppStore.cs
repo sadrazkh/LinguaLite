@@ -222,8 +222,11 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                     ai_card integer NOT NULL DEFAULT 0,
                     ai_dictionary integer NOT NULL DEFAULT 0,
                     ai_correction integer NOT NULL DEFAULT 0,
+                    active_seconds integer NOT NULL DEFAULT 0,
                     PRIMARY KEY (user_id, activity_date)
                 );
+
+                ALTER TABLE app_user_daily_activity ADD COLUMN IF NOT EXISTS active_seconds integer NOT NULL DEFAULT 0;
 
                 CREATE TABLE IF NOT EXISTS app_settings (
                     key text PRIMARY KEY,
@@ -479,6 +482,162 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         await ApplyCardSummaryChangeAsync(connection, transaction, userId, before, card);
         await transaction.CommitAsync();
         return card;
+    }
+
+    public async Task<SyncCardProgressBatchResult> SyncCardProgressBatchAsync(string userId, IReadOnlyCollection<SyncCardProgressItem> items)
+    {
+        await EnsureReadyAsync();
+        var requested = items.Count;
+        var latest = items
+            .GroupBy(item => item.Id)
+            .Select(group => group.MaxBy(item => item.LastReviewedAt)!)
+            .ToList();
+        if (latest.Count == 0) return new SyncCardProgressBatchResult(requested, 0);
+
+        var payload = JsonSerializer.Serialize(latest.Select(item => new
+        {
+            id = item.Id,
+            box = item.Box,
+            total_reviews = item.TotalReviews,
+            correct_reviews = item.CorrectReviews,
+            last_reviewed_at = item.LastReviewedAt.ToUniversalTime(),
+            next_review_at = item.NextReviewAt.ToUniversalTime()
+        }), JsonOptions);
+
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await EnsureDeckSummaryAsync(connection, transaction, userId);
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            WITH input AS (
+                SELECT *
+                FROM jsonb_to_recordset(@items) AS value(
+                    id uuid,
+                    box integer,
+                    total_reviews integer,
+                    correct_reviews integer,
+                    last_reviewed_at timestamptz,
+                    next_review_at timestamptz)
+            ),
+            before_rows AS MATERIALIZED (
+                SELECT c.id,
+                       c.box AS old_box,
+                       c.total_reviews AS old_total_reviews,
+                       c.correct_reviews AS old_correct_reviews,
+                       c.next_review_at AS old_next_review_at,
+                       c.is_archived,
+                       i.box AS new_box,
+                       GREATEST(c.total_reviews, i.total_reviews) AS new_total_reviews,
+                       LEAST(
+                           GREATEST(c.total_reviews, i.total_reviews),
+                           GREATEST(c.correct_reviews, i.correct_reviews)
+                       ) AS new_correct_reviews,
+                       i.last_reviewed_at AS new_last_reviewed_at,
+                       i.next_review_at AS new_next_review_at
+                FROM app_cards c
+                JOIN input i ON i.id = c.id
+                WHERE c.user_id = @user_id
+                  AND c.is_archived = false
+                  AND (c.last_reviewed_at IS NULL OR i.last_reviewed_at > c.last_reviewed_at)
+                FOR UPDATE OF c
+            ),
+            updated AS (
+                UPDATE app_cards c
+                SET box = b.new_box,
+                    total_reviews = b.new_total_reviews,
+                    correct_reviews = b.new_correct_reviews,
+                    last_reviewed_at = b.new_last_reviewed_at,
+                    next_review_at = b.new_next_review_at
+                FROM before_rows b
+                WHERE c.user_id = @user_id AND c.id = b.id
+                RETURNING c.id, c.box, c.total_reviews, c.correct_reviews,
+                          c.next_review_at, c.last_reviewed_at, c.is_archived
+            ),
+            deltas AS (
+                SELECT COUNT(*)::int AS applied,
+                       COALESCE(SUM(u.total_reviews - b.old_total_reviews), 0)::bigint AS total_reviews_delta,
+                       COALESCE(SUM(u.correct_reviews - b.old_correct_reviews), 0)::bigint AS correct_reviews_delta,
+                       COALESCE(SUM((u.box = 1)::int - (b.old_box = 1)::int), 0)::int AS box_1_delta,
+                       COALESCE(SUM((u.box = 2)::int - (b.old_box = 2)::int), 0)::int AS box_2_delta,
+                       COALESCE(SUM((u.box = 3)::int - (b.old_box = 3)::int), 0)::int AS box_3_delta,
+                       COALESCE(SUM((u.box = 4)::int - (b.old_box = 4)::int), 0)::int AS box_4_delta,
+                       COALESCE(SUM((u.box = 5)::int - (b.old_box = 5)::int), 0)::int AS box_5_delta,
+                       MAX(u.last_reviewed_at) AS last_reviewed_at
+                FROM before_rows b
+                JOIN updated u ON u.id = b.id
+            ),
+            summary_update AS (
+                UPDATE app_user_deck_summaries s
+                SET box_1_count = s.box_1_count + d.box_1_delta,
+                    box_2_count = s.box_2_count + d.box_2_delta,
+                    box_3_count = s.box_3_count + d.box_3_delta,
+                    box_4_count = s.box_4_count + d.box_4_delta,
+                    box_5_count = s.box_5_count + d.box_5_delta,
+                    total_reviews = s.total_reviews + d.total_reviews_delta,
+                    correct_reviews = s.correct_reviews + d.correct_reviews_delta,
+                    last_reviewed_at = CASE
+                        WHEN d.last_reviewed_at IS NULL THEN s.last_reviewed_at
+                        WHEN s.last_reviewed_at IS NULL THEN d.last_reviewed_at
+                        ELSE GREATEST(s.last_reviewed_at, d.last_reviewed_at)
+                    END,
+                    updated_at = now()
+                FROM deltas d
+                WHERE s.user_id = @user_id AND d.applied > 0
+                RETURNING s.user_id
+            ),
+            due_changes AS (
+                SELECT CAST(@user_id AS text) AS user_id,
+                       (b.old_next_review_at AT TIME ZONE 'UTC')::date AS due_date,
+                       -1 AS delta
+                FROM before_rows b
+                UNION ALL
+                SELECT CAST(@user_id AS text),
+                       (u.next_review_at AT TIME ZONE 'UTC')::date,
+                       1
+                FROM updated u
+            ),
+            due_grouped AS (
+                SELECT user_id, due_date, SUM(delta)::int AS delta
+                FROM due_changes
+                GROUP BY user_id, due_date
+                HAVING SUM(delta) <> 0
+            ),
+            due_upsert AS (
+                INSERT INTO app_card_due_buckets (user_id, due_date, active_count)
+                SELECT user_id, due_date, delta FROM due_grouped
+                ON CONFLICT (user_id, due_date) DO UPDATE
+                SET active_count = app_card_due_buckets.active_count + EXCLUDED.active_count
+                RETURNING user_id
+            ),
+            activity_update AS (
+                INSERT INTO app_user_daily_activity
+                    (user_id, activity_date, first_seen_at, last_seen_at, request_count,
+                     cards_added, reviews, ai_card, ai_dictionary, ai_correction)
+                SELECT @user_id, @activity_date, @now, @now, 0, 0, d.applied, 0, 0, 0
+                FROM deltas d
+                WHERE d.applied > 0
+                ON CONFLICT (user_id, activity_date) DO UPDATE SET
+                    active_seconds = app_user_daily_activity.active_seconds +
+                        CASE
+                            WHEN EXCLUDED.last_seen_at >= app_user_daily_activity.last_seen_at
+                             AND EXCLUDED.last_seen_at - app_user_daily_activity.last_seen_at <= interval '5 minutes'
+                            THEN FLOOR(EXTRACT(EPOCH FROM (EXCLUDED.last_seen_at - app_user_daily_activity.last_seen_at)))::int
+                            ELSE 0
+                        END,
+                    last_seen_at = EXCLUDED.last_seen_at,
+                    reviews = app_user_daily_activity.reviews + EXCLUDED.reviews
+                RETURNING user_id
+            )
+            SELECT applied FROM deltas;
+            """;
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.Add("items", NpgsqlDbType.Jsonb).Value = payload;
+        command.Parameters.AddWithValue("activity_date", ReportingClock.Today(configuration));
+        command.Parameters.AddWithValue("now", DateTimeOffset.UtcNow);
+        var applied = Convert.ToInt32(await command.ExecuteScalarAsync() ?? 0);
+        await transaction.CommitAsync();
+        return new SyncCardProgressBatchResult(requested, applied);
     }
 
     public async Task<bool> DeleteCardAsync(string userId, Guid cardId)
@@ -945,7 +1104,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         if (!summary.Allowed) return summary;
 
         var toolKey = ToolKey(tool);
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = ReportingClock.Today(configuration);
         await using var connection = await DataSource.OpenConnectionAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -1109,7 +1268,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
     {
         await EnsureReadyAsync();
         var safeCount = Math.Max(1, count);
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = ReportingClock.Today(configuration);
         var now = DateTimeOffset.UtcNow;
         var increments = ActivityIncrements(kind, safeCount);
 
@@ -1123,6 +1282,13 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                 (@user_id, @activity_date, @now, @now, @request_count,
                  @cards_added, @reviews, @ai_card, @ai_dictionary, @ai_correction)
             ON CONFLICT (user_id, activity_date) DO UPDATE SET
+                active_seconds = app_user_daily_activity.active_seconds +
+                    CASE
+                        WHEN EXCLUDED.last_seen_at >= app_user_daily_activity.last_seen_at
+                         AND EXCLUDED.last_seen_at - app_user_daily_activity.last_seen_at <= interval '5 minutes'
+                        THEN FLOOR(EXTRACT(EPOCH FROM (EXCLUDED.last_seen_at - app_user_daily_activity.last_seen_at)))::int
+                        ELSE 0
+                    END,
                 last_seen_at = EXCLUDED.last_seen_at,
                 request_count = app_user_daily_activity.request_count + EXCLUDED.request_count,
                 cards_added = app_user_daily_activity.cards_added + EXCLUDED.cards_added,
@@ -1146,19 +1312,22 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
     public async Task<List<AdminUserMetrics>> GetAdminUserMetricsAsync()
     {
         await EnsureReadyAsync();
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var reportToday = ReportingClock.Today(configuration);
+        var dueToday = DateOnly.FromDateTime(DateTime.UtcNow);
 
         await using var connection = await DataSource.OpenConnectionAsync();
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT
                 u.id,
+                COALESCE(s.total_cards, 0)::int,
                 COALESCE(s.active_cards, 0)::int,
+                COALESCE(s.archived_cards, 0)::int,
                 COALESCE(card_counts.due_cards, 0)::int,
                 COALESCE(a.request_count, 0)::int,
                 CASE
                     WHEN a.first_seen_at IS NULL THEN 0
-                    WHEN a.request_count > 0 THEN GREATEST(1, CEIL(EXTRACT(EPOCH FROM (a.last_seen_at - a.first_seen_at)) / 60.0))::int
+                    WHEN a.request_count > 0 THEN GREATEST(1, CEIL(a.active_seconds / 60.0))::int
                     ELSE 0
                 END AS active_minutes,
                 COALESCE(a.cards_added, 0)::int,
@@ -1171,13 +1340,14 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
             LEFT JOIN LATERAL (
                 SELECT COALESCE(SUM(active_count), 0)::int AS due_cards
                 FROM app_card_due_buckets b
-                WHERE b.user_id = u.id AND b.due_date <= @today
+                WHERE b.user_id = u.id AND b.due_date <= @due_today
             ) card_counts ON true
             LEFT JOIN app_user_daily_activity a
-                ON a.user_id = u.id AND a.activity_date = @today
+                ON a.user_id = u.id AND a.activity_date = @report_today
             ORDER BY u.last_seen_at DESC;
             """;
-        command.Parameters.AddWithValue("today", today);
+        command.Parameters.AddWithValue("report_today", reportToday);
+        command.Parameters.AddWithValue("due_today", dueToday);
 
         var result = new List<AdminUserMetrics>();
         await using var reader = await command.ExecuteReaderAsync();
@@ -1187,14 +1357,16 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
             {
                 UserId = reader.GetString(0),
                 TotalCards = reader.GetInt32(1),
-                DueCards = reader.GetInt32(2),
-                RequestsToday = reader.GetInt32(3),
-                ActiveMinutesToday = reader.GetInt32(4),
-                CardsAddedToday = reader.GetInt32(5),
-                ReviewsToday = reader.GetInt32(6),
-                AiCardToday = reader.GetInt32(7),
-                AiDictionaryToday = reader.GetInt32(8),
-                AiCorrectionToday = reader.GetInt32(9)
+                ActiveCards = reader.GetInt32(2),
+                ArchivedCards = reader.GetInt32(3),
+                DueCards = reader.GetInt32(4),
+                RequestsToday = reader.GetInt32(5),
+                ActiveMinutesToday = reader.GetInt32(6),
+                CardsAddedToday = reader.GetInt32(7),
+                ReviewsToday = reader.GetInt32(8),
+                AiCardToday = reader.GetInt32(9),
+                AiDictionaryToday = reader.GetInt32(10),
+                AiCorrectionToday = reader.GetInt32(11)
             });
         }
 
