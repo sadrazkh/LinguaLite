@@ -63,6 +63,49 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         return db.Decks.TryGetValue(userId, out var deck) ? deck : new DeckState();
     }
 
+    public async Task<DeckSummary> GetDeckSummaryAsync(string userId)
+    {
+        var deck = await GetDeckAsync(userId);
+        return DeckSummary.From(deck);
+    }
+
+    public async Task<CardPage> GetCardsPageAsync(string userId, bool archived, int limit, string? cursor, IReadOnlyCollection<int>? boxes = null)
+    {
+        var deck = await GetDeckAsync(userId);
+        var query = deck.Cards.Where(card => card.IsArchived == archived);
+        if (!archived && boxes is { Count: > 0 }) query = query.Where(card => boxes.Contains(card.Box));
+        var ordered = query.OrderByDescending(card => card.CreatedAt).ThenByDescending(card => card.Id).ToList();
+        if (CardCursor.TryDecode(cursor, out var createdAt, out var id))
+        {
+            ordered = ordered.Where(card => card.CreatedAt < createdAt || (card.CreatedAt == createdAt && card.Id.CompareTo(id) < 0)).ToList();
+        }
+
+        var pageSize = Math.Clamp(limit, 1, 100);
+        var items = ordered.Take(pageSize + 1).ToList();
+        var hasMore = items.Count > pageSize;
+        if (hasMore) items.RemoveAt(items.Count - 1);
+        var nextCursor = hasMore && items.Count > 0 ? CardCursor.Encode(items[^1].CreatedAt, items[^1].Id) : null;
+        return new CardPage(items, nextCursor, hasMore);
+    }
+
+    public async Task<List<FlashCard>> GetDueCardsAsync(string userId, int limit)
+    {
+        var deck = await GetDeckAsync(userId);
+        var now = DateTimeOffset.UtcNow;
+        return deck.Cards
+            .Where(card => !card.IsArchived && LeitnerSchedule.IsDue(card, now))
+            .OrderBy(card => card.NextReviewAt)
+            .ThenBy(card => card.Box)
+            .Take(Math.Clamp(limit, 1, 100))
+            .ToList();
+    }
+
+    public async Task<FlashCard?> GetCardAsync(string userId, Guid cardId)
+    {
+        var deck = await GetDeckAsync(userId);
+        return deck.Cards.FirstOrDefault(card => card.Id == cardId);
+    }
+
     public async Task AddCardAsync(string userId, FlashCard card)
     {
         await MutateAsync(db =>
@@ -269,6 +312,16 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
             EnsurePackages(db);
             return db.Packages.OrderBy(item => item.SortOrder).ThenBy(item => item.Title).ToList();
         });
+    }
+
+    public async Task<List<PackageProgress>> GetPackageProgressAsync(string userId)
+    {
+        var deck = await GetDeckAsync(userId);
+        return deck.Cards
+            .Where(card => !string.IsNullOrWhiteSpace(card.SourcePackageId))
+            .GroupBy(card => card.SourcePackageId, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new PackageProgress(group.Key, group.Count()))
+            .ToList();
     }
 
     public async Task<LearningPackage> UpsertPackageAsync(LearningPackage package)
@@ -510,6 +563,103 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         });
     }
 
+    public async Task<List<ReminderCandidate>> GetDueReminderCandidatesAsync(DateTimeOffset now, int defaultReminderHour)
+    {
+        var db = await LoadAsync();
+        var result = new List<ReminderCandidate>();
+        foreach (var user in db.Users.Values)
+        {
+            if (!user.IsActive || !user.RemindersEnabled || !user.TelegramChatId.HasValue) continue;
+            if ((user.ReminderHour ?? defaultReminderHour) != now.Hour) continue;
+            if (user.LastReminderAt?.UtcDateTime.Date == now.UtcDateTime.Date) continue;
+            var due = db.Decks.TryGetValue(user.Id, out var deck)
+                ? deck.Cards.Count(card => !card.IsArchived && LeitnerSchedule.IsDue(card, now))
+                : 0;
+            if (due > 0) result.Add(new ReminderCandidate(user, due));
+        }
+        return result;
+    }
+
+    public async Task<BroadcastJob> QueueBroadcastAsync(AdminBroadcastRequest request)
+    {
+        return await MutateAsync(db =>
+        {
+            var job = new BroadcastJob { Id = Guid.NewGuid(), Message = request.Message.Trim(), CreatedAt = DateTimeOffset.UtcNow };
+            var users = db.Users.Values.Where(user => MatchesBroadcast(user, request)).ToList();
+            job.Matched = users.Count;
+            foreach (var user in users.Where(user => user.TelegramChatId.HasValue))
+            {
+                db.BroadcastRecipients.Add(new LocalBroadcastRecipient { JobId = job.Id, UserId = user.Id, ChatId = user.TelegramChatId!.Value });
+            }
+            job.Skipped = job.Matched - db.BroadcastRecipients.Count(item => item.JobId == job.Id);
+            db.BroadcastJobs.Add(job);
+            return job;
+        });
+    }
+
+    public async Task<List<BroadcastJob>> GetBroadcastJobsAsync(int limit = 20)
+    {
+        var db = await LoadAsync();
+        return db.BroadcastJobs.OrderByDescending(job => job.CreatedAt).Take(Math.Clamp(limit, 1, 100)).ToList();
+    }
+
+    public async Task<List<BroadcastDelivery>> ClaimBroadcastDeliveriesAsync(int batchSize)
+    {
+        return await MutateAsync(db =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            var jobs = db.BroadcastJobs.Where(job => job.Status is "queued" or "running").ToDictionary(job => job.Id);
+            var recipients = db.BroadcastRecipients
+                .Where(item => jobs.ContainsKey(item.JobId) && item.Status == "pending" && item.NextAttemptAt <= now)
+                .OrderBy(item => jobs[item.JobId].CreatedAt)
+                .Take(Math.Clamp(batchSize, 1, 100))
+                .ToList();
+            foreach (var item in recipients)
+            {
+                item.Status = "sending";
+                item.Attempts++;
+                item.NextAttemptAt = now.AddMinutes(5);
+                var job = jobs[item.JobId];
+                job.Status = "running";
+                job.StartedAt ??= now;
+            }
+            return recipients.Select(item => new BroadcastDelivery(item.JobId, item.UserId, item.ChatId, jobs[item.JobId].Message, item.Attempts)).ToList();
+        });
+    }
+
+    public async Task CompleteBroadcastDeliveryAsync(BroadcastDelivery delivery, bool sent, string? error)
+    {
+        await MutateAsync(db =>
+        {
+            var recipient = db.BroadcastRecipients.FirstOrDefault(item => item.JobId == delivery.JobId && item.UserId == delivery.UserId);
+            var job = db.BroadcastJobs.FirstOrDefault(item => item.Id == delivery.JobId);
+            if (recipient is null || job is null) return false;
+            if (sent)
+            {
+                recipient.Status = "sent";
+                job.Sent++;
+            }
+            else if (recipient.Attempts >= 4)
+            {
+                recipient.Status = "failed";
+                recipient.LastError = error ?? string.Empty;
+                job.Failed++;
+            }
+            else
+            {
+                recipient.Status = "pending";
+                recipient.LastError = error ?? string.Empty;
+                recipient.NextAttemptAt = DateTimeOffset.UtcNow.AddSeconds(Math.Min(300, 10 * recipient.Attempts * recipient.Attempts));
+            }
+            if (!db.BroadcastRecipients.Any(item => item.JobId == job.Id && (item.Status == "pending" || item.Status == "sending")))
+            {
+                job.Status = "completed";
+                job.CompletedAt = DateTimeOffset.UtcNow;
+            }
+            return true;
+        });
+    }
+
     private async Task<LocalAppDatabase> LoadAsync()
     {
         await _gate.WaitAsync();
@@ -746,6 +896,23 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         package.RequiredPlans.Count == 0
         || package.RequiredPlans.Any(plan => plan.Equals(planName, StringComparison.OrdinalIgnoreCase) || NormalizePlanId(plan) == NormalizePlanId(planName));
 
+    private static bool MatchesBroadcast(UserProfile user, AdminBroadcastRequest request)
+    {
+        if (request.Audience.Equals("selected", StringComparison.OrdinalIgnoreCase)) return request.UserIds?.Contains(user.Id) == true;
+        if (request.Audience.Equals("all", StringComparison.OrdinalIgnoreCase)) return true;
+        if (!string.IsNullOrWhiteSpace(request.Plan) && !user.Plan.Equals(request.Plan, StringComparison.OrdinalIgnoreCase)) return false;
+        if (request.IsActive.HasValue && user.IsActive != request.IsActive.Value) return false;
+        if (!string.IsNullOrWhiteSpace(request.Source) && !user.Source.Equals(request.Source, StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.IsNullOrWhiteSpace(request.AccessCode) && !user.AccessCode.Equals(request.AccessCode, StringComparison.OrdinalIgnoreCase)) return false;
+        if (!string.IsNullOrWhiteSpace(request.Search))
+        {
+            var search = request.Search.Trim();
+            var value = $"{user.Id} {user.DisplayName} {user.TelegramId} {user.TelegramUsername}";
+            if (!value.Contains(search, StringComparison.OrdinalIgnoreCase)) return false;
+        }
+        return true;
+    }
+
     private static string CardSignature(FlashCard card) => $"{card.Type}:{NormalizeText(card.Front)}";
     private static string NormalizeText(string value) => new(value.Trim().ToLowerInvariant().Where(ch => !char.IsWhiteSpace(ch)).ToArray());
     private static string Slug(string value) => NormalizePlanId(value);
@@ -761,6 +928,8 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         public List<BrowserLoginCode> BrowserLoginCodes { get; set; } = [];
         public List<LocalBrowserSession> BrowserSessions { get; set; } = [];
         public List<LocalUserActivity> UserActivity { get; set; } = [];
+        public List<BroadcastJob> BroadcastJobs { get; set; } = [];
+        public List<LocalBroadcastRecipient> BroadcastRecipients { get; set; } = [];
         public AppSettingsState Settings { get; set; } = new();
     }
 
@@ -792,5 +961,16 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         public int AiCard { get; set; }
         public int AiDictionary { get; set; }
         public int AiCorrection { get; set; }
+    }
+
+    private sealed class LocalBroadcastRecipient
+    {
+        public Guid JobId { get; set; }
+        public string UserId { get; set; } = string.Empty;
+        public long ChatId { get; set; }
+        public string Status { get; set; } = "pending";
+        public int Attempts { get; set; }
+        public DateTimeOffset NextAttemptAt { get; set; } = DateTimeOffset.UtcNow;
+        public string LastError { get; set; } = string.Empty;
     }
 }

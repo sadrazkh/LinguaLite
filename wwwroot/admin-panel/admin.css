@@ -579,6 +579,37 @@
   gap: 10px;
 }
 
+.broadcast-jobs {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.broadcast-job {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.broadcast-job > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.broadcast-job small { color: var(--muted); }
+
+.broadcast-job-progress {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--surface-2);
+}
+
+.broadcast-job-progress i { display: block; height: 100%; background: var(--primary); }
+
 .broadcast-result {
   display: grid;
   gap: 7px;

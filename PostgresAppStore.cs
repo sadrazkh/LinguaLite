@@ -71,14 +71,77 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                     last_reviewed_at timestamptz NULL,
                     is_archived boolean NOT NULL DEFAULT false,
                     source_package_id text NOT NULL DEFAULT '',
-                    source_package_card_id text NOT NULL DEFAULT ''
+                    source_package_card_id text NOT NULL DEFAULT '',
+                    card_signature text NOT NULL DEFAULT ''
                 );
 
                 ALTER TABLE app_cards ADD COLUMN IF NOT EXISTS is_archived boolean NOT NULL DEFAULT false;
                 ALTER TABLE app_cards ADD COLUMN IF NOT EXISTS source_package_id text NOT NULL DEFAULT '';
                 ALTER TABLE app_cards ADD COLUMN IF NOT EXISTS source_package_card_id text NOT NULL DEFAULT '';
+                ALTER TABLE app_cards ADD COLUMN IF NOT EXISTS card_signature text NOT NULL DEFAULT '';
 
-                CREATE INDEX IF NOT EXISTS ix_app_cards_user_due ON app_cards(user_id, next_review_at);
+                CREATE INDEX IF NOT EXISTS ix_app_cards_due_active
+                    ON app_cards(user_id, next_review_at, box, id) WHERE is_archived = false;
+                CREATE INDEX IF NOT EXISTS ix_app_cards_active_cursor
+                    ON app_cards(user_id, created_at DESC, id DESC) WHERE is_archived = false;
+                CREATE INDEX IF NOT EXISTS ix_app_cards_archived_cursor
+                    ON app_cards(user_id, created_at DESC, id DESC) WHERE is_archived = true;
+                CREATE INDEX IF NOT EXISTS ix_app_cards_signature
+                    ON app_cards(user_id, card_signature);
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_app_cards_package_source
+                    ON app_cards(user_id, source_package_id, source_package_card_id)
+                    WHERE source_package_id <> '' AND source_package_card_id <> '';
+
+                CREATE TABLE IF NOT EXISTS app_user_deck_summaries (
+                    user_id text PRIMARY KEY REFERENCES app_users(id) ON DELETE CASCADE,
+                    total_cards integer NOT NULL DEFAULT 0,
+                    active_cards integer NOT NULL DEFAULT 0,
+                    archived_cards integer NOT NULL DEFAULT 0,
+                    due_cards integer NOT NULL DEFAULT 0,
+                    box_1_count integer NOT NULL DEFAULT 0,
+                    box_2_count integer NOT NULL DEFAULT 0,
+                    box_3_count integer NOT NULL DEFAULT 0,
+                    box_4_count integer NOT NULL DEFAULT 0,
+                    box_5_count integer NOT NULL DEFAULT 0,
+                    total_reviews bigint NOT NULL DEFAULT 0,
+                    correct_reviews bigint NOT NULL DEFAULT 0,
+                    last_reviewed_at timestamptz NULL,
+                    updated_at timestamptz NOT NULL DEFAULT now()
+                );
+
+                CREATE TABLE IF NOT EXISTS app_card_due_buckets (
+                    user_id text NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+                    due_date date NOT NULL,
+                    active_count integer NOT NULL DEFAULT 0,
+                    PRIMARY KEY (user_id, due_date)
+                );
+                CREATE INDEX IF NOT EXISTS ix_card_due_buckets_due_date
+                    ON app_card_due_buckets(due_date, user_id);
+
+                CREATE TABLE IF NOT EXISTS app_broadcast_jobs (
+                    id uuid PRIMARY KEY,
+                    message text NOT NULL,
+                    status text NOT NULL DEFAULT 'queued',
+                    matched integer NOT NULL DEFAULT 0,
+                    sent integer NOT NULL DEFAULT 0,
+                    skipped integer NOT NULL DEFAULT 0,
+                    failed integer NOT NULL DEFAULT 0,
+                    created_at timestamptz NOT NULL,
+                    started_at timestamptz NULL,
+                    completed_at timestamptz NULL
+                );
+                CREATE TABLE IF NOT EXISTS app_broadcast_recipients (
+                    job_id uuid NOT NULL REFERENCES app_broadcast_jobs(id) ON DELETE CASCADE,
+                    user_id text NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+                    chat_id bigint NOT NULL,
+                    status text NOT NULL DEFAULT 'pending',
+                    attempts integer NOT NULL DEFAULT 0,
+                    next_attempt_at timestamptz NOT NULL DEFAULT now(),
+                    last_error text NOT NULL DEFAULT '',
+                    PRIMARY KEY (job_id, user_id)
+                );
+                CREATE INDEX IF NOT EXISTS ix_broadcast_recipients_pending
+                    ON app_broadcast_recipients(status, next_attempt_at, job_id);
 
                 CREATE TABLE IF NOT EXISTS app_access_codes (
                     code text PRIMARY KEY,
@@ -206,6 +269,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
             existing.LastSeenAt = DateTimeOffset.UtcNow;
 
             await UpsertUserAsync(connection, transaction, existing);
+            await EnsureDeckSummaryAsync(connection, transaction, existing.Id);
             await transaction.CommitAsync();
             return existing;
         }
@@ -227,6 +291,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         {
             await InsertCardAsync(connection, transaction, profile.Id, card);
         }
+        await EnsureDeckSummaryAsync(connection, transaction, profile.Id);
 
         await transaction.CommitAsync();
         return profile;
@@ -257,11 +322,145 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         return deck;
     }
 
+    public async Task<DeckSummary> GetDeckSummaryAsync(string userId)
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await EnsureDeckSummaryAsync(connection, transaction, userId);
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT s.active_cards,
+                   COALESCE((SELECT SUM(b.active_count)::int
+                             FROM app_card_due_buckets b
+                             WHERE b.user_id = s.user_id AND b.due_date <= @today), 0),
+                   s.box_4_count + s.box_5_count,
+                   s.total_reviews,
+                   s.correct_reviews,
+                   s.box_1_count, s.box_2_count, s.box_3_count, s.box_4_count, s.box_5_count,
+                   s.archived_cards, s.last_reviewed_at
+            FROM app_user_deck_summaries s
+            WHERE s.user_id = @user_id;
+            """;
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("today", DateOnly.FromDateTime(DateTime.UtcNow));
+        await using var reader = await command.ExecuteReaderAsync();
+        if (!await reader.ReadAsync())
+        {
+            await transaction.CommitAsync();
+            return new DeckSummary(0, 0, 0, 0, EmptyBoxes());
+        }
+
+        var totalReviews = reader.GetInt64(3);
+        var correctReviews = reader.GetInt64(4);
+        var summary = new DeckSummary(
+            reader.GetInt32(0),
+            reader.GetInt32(1),
+            reader.GetInt32(2),
+            totalReviews == 0 ? 0 : Math.Round((double)correctReviews / totalReviews * 100, 1),
+            new Dictionary<int, int>
+            {
+                [1] = reader.GetInt32(5), [2] = reader.GetInt32(6), [3] = reader.GetInt32(7),
+                [4] = reader.GetInt32(8), [5] = reader.GetInt32(9)
+            },
+            reader.GetInt32(0),
+            reader.GetInt32(10),
+            reader.IsDBNull(11) ? null : reader.GetFieldValue<DateTimeOffset>(11),
+            totalReviews,
+            correctReviews);
+        await reader.DisposeAsync();
+        await transaction.CommitAsync();
+        return summary;
+    }
+
+    public async Task<CardPage> GetCardsPageAsync(string userId, bool archived, int limit, string? cursor, IReadOnlyCollection<int>? boxes = null)
+    {
+        await EnsureReadyAsync();
+        var pageSize = Math.Clamp(limit, 1, 100);
+        var hasCursor = CardCursor.TryDecode(cursor, out var cursorCreatedAt, out var cursorId);
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, front, back, example, prompt, answer, notes, type, box,
+                   total_reviews, correct_reviews, created_at, next_review_at, last_reviewed_at,
+                   is_archived, source_package_id, source_package_card_id
+            FROM app_cards
+            WHERE user_id = @user_id AND is_archived = @archived
+              AND (@has_cursor = false OR (created_at, id) < (@cursor_created_at, @cursor_id))
+              AND (@use_boxes = false OR box = ANY(@boxes))
+            ORDER BY created_at DESC, id DESC
+            LIMIT @take;
+            """;
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("archived", archived);
+        command.Parameters.AddWithValue("has_cursor", hasCursor);
+        command.Parameters.AddWithValue("cursor_created_at", hasCursor ? cursorCreatedAt : DateTimeOffset.MaxValue);
+        command.Parameters.AddWithValue("cursor_id", hasCursor ? cursorId : Guid.Empty);
+        var normalizedBoxes = boxes?.Where(box => box is >= 1 and <= 5).Distinct().ToArray() ?? [];
+        command.Parameters.AddWithValue("use_boxes", !archived && normalizedBoxes.Length > 0);
+        command.Parameters.AddWithValue("boxes", normalizedBoxes);
+        command.Parameters.AddWithValue("take", pageSize + 1);
+
+        var items = new List<FlashCard>(pageSize + 1);
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) items.Add(ReadCard(reader));
+        var hasMore = items.Count > pageSize;
+        if (hasMore) items.RemoveAt(items.Count - 1);
+        return new CardPage(items, hasMore && items.Count > 0 ? CardCursor.Encode(items[^1].CreatedAt, items[^1].Id) : null, hasMore);
+    }
+
+    public async Task<List<FlashCard>> GetDueCardsAsync(string userId, int limit)
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, front, back, example, prompt, answer, notes, type, box,
+                   total_reviews, correct_reviews, created_at, next_review_at, last_reviewed_at,
+                   is_archived, source_package_id, source_package_card_id
+            FROM app_cards
+            WHERE user_id = @user_id AND is_archived = false AND next_review_at < @tomorrow
+            ORDER BY next_review_at, box, id
+            LIMIT @take;
+            """;
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("tomorrow", LeitnerSchedule.TodayUtc().AddDays(1));
+        command.Parameters.AddWithValue("take", Math.Clamp(limit, 1, 100));
+        var cards = new List<FlashCard>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) cards.Add(ReadCard(reader));
+        return cards;
+    }
+
+    public async Task<FlashCard?> GetCardAsync(string userId, Guid cardId)
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, front, back, example, prompt, answer, notes, type, box,
+                   total_reviews, correct_reviews, created_at, next_review_at, last_reviewed_at,
+                   is_archived, source_package_id, source_package_card_id
+            FROM app_cards
+            WHERE user_id = @user_id AND id = @id;
+            """;
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("id", cardId);
+        await using var reader = await command.ExecuteReaderAsync();
+        return await reader.ReadAsync() ? ReadCard(reader) : null;
+    }
+
     public async Task AddCardAsync(string userId, FlashCard card)
     {
         await EnsureReadyAsync();
         await using var connection = await DataSource.OpenConnectionAsync();
-        await InsertCardAsync(connection, null, userId, card);
+        await using var transaction = await connection.BeginTransactionAsync();
+        await EnsureDeckSummaryAsync(connection, transaction, userId);
+        await InsertCardAsync(connection, transaction, userId, card);
+        await ApplyCardSummaryChangeAsync(connection, transaction, userId, null, card);
+        await transaction.CommitAsync();
     }
 
     public async Task<FlashCard?> UpdateCardAsync(string userId, Guid cardId, Action<FlashCard> update)
@@ -273,8 +472,11 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         var card = await FindCardAsync(connection, transaction, userId, cardId);
         if (card is null) return null;
 
+        var before = CloneCard(card);
         update(card);
         await UpdateCardRowAsync(connection, transaction, userId, card);
+        await EnsureDeckSummaryAsync(connection, transaction, userId);
+        await ApplyCardSummaryChangeAsync(connection, transaction, userId, before, card);
         await transaction.CommitAsync();
         return card;
     }
@@ -283,11 +485,19 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
     {
         await EnsureReadyAsync();
         await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var card = await FindCardAsync(connection, transaction, userId, cardId);
+        if (card is null) return false;
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "DELETE FROM app_cards WHERE user_id = @user_id AND id = @id;";
         command.Parameters.AddWithValue("user_id", userId);
         command.Parameters.AddWithValue("id", cardId);
-        return await command.ExecuteNonQueryAsync() > 0;
+        await command.ExecuteNonQueryAsync();
+        await EnsureDeckSummaryAsync(connection, transaction, userId);
+        await ApplyCardSummaryChangeAsync(connection, transaction, userId, card, null);
+        await transaction.CommitAsync();
+        return true;
     }
 
     public async Task<int> ImportCardsAsync(string userId, List<FlashCard> cards, ImportMode mode)
@@ -296,6 +506,8 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         await using var connection = await DataSource.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
 
+        await EnsureDeckSummaryAsync(connection, transaction, userId);
+
         if (mode == ImportMode.Replace)
         {
             await using var delete = connection.CreateCommand();
@@ -303,23 +515,26 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
             delete.CommandText = "DELETE FROM app_cards WHERE user_id = @user_id;";
             delete.Parameters.AddWithValue("user_id", userId);
             await delete.ExecuteNonQueryAsync();
+            await ResetDeckSummaryAsync(connection, transaction, userId);
         }
 
-        var existingIds = await GetCardIdsAsync(connection, transaction, userId);
         var imported = 0;
+        var batch = new List<FlashCard>(250);
         foreach (var card in cards)
         {
-            if (card.Id == Guid.Empty || existingIds.Contains(card.Id))
-            {
-                card.Id = Guid.NewGuid();
-            }
+            if (card.Id == Guid.Empty) card.Id = Guid.NewGuid();
 
             card.CreatedAt = card.CreatedAt == default ? DateTimeOffset.UtcNow : card.CreatedAt;
             card.NextReviewAt = card.NextReviewAt == default ? LeitnerSchedule.TodayUtc() : card.NextReviewAt;
-            await InsertCardAsync(connection, transaction, userId, card);
-            existingIds.Add(card.Id);
-            imported++;
+            card.LastReviewedAt = card.LastReviewedAt?.ToUniversalTime();
+            batch.Add(card);
+            if (batch.Count < 250) continue;
+            imported += await InsertImportBatchAsync(connection, transaction, userId, batch);
+            batch.Clear();
         }
+
+        if (batch.Count > 0) imported += await InsertImportBatchAsync(connection, transaction, userId, batch);
+        await RebuildDeckSummaryAsync(connection, transaction, userId);
 
         await transaction.CommitAsync();
         return imported;
@@ -583,6 +798,24 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         return packages.OrderBy(item => item.SortOrder).ThenBy(item => item.Title).ToList();
     }
 
+    public async Task<List<PackageProgress>> GetPackageProgressAsync(string userId)
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT source_package_id, COUNT(*)::int
+            FROM app_cards
+            WHERE user_id = @user_id AND source_package_id <> ''
+            GROUP BY source_package_id;
+            """;
+        command.Parameters.AddWithValue("user_id", userId);
+        var result = new List<PackageProgress>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) result.Add(new PackageProgress(reader.GetString(0), reader.GetInt32(1)));
+        return result;
+    }
+
     public async Task<LearningPackage> UpsertPackageAsync(LearningPackage package)
     {
         await EnsureReadyAsync();
@@ -630,12 +863,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         if (package is null) return new PackageImportResult(packageId, count, 0, 0, 0, "بسته پیدا نشد.");
         if (!HasPackageAccess(package, planName)) return new PackageImportResult(package.Id, count, 0, 0, count, "پلن شما به این بسته دسترسی ندارد.");
 
-        var deck = await LoadDeckAsync(connection, transaction, userId, lockRows: true);
-        var existingPackageCards = deck.Cards
-            .Where(card => card.SourcePackageId.Equals(package.Id, StringComparison.OrdinalIgnoreCase))
-            .Select(card => card.SourcePackageCardId)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var existingSignatures = deck.Cards.Select(CardSignature).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        await EnsureDeckSummaryAsync(connection, transaction, userId);
         var requested = Math.Clamp(count, 1, 100);
         var added = 0;
         var skippedDuplicate = 0;
@@ -643,23 +871,28 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         foreach (var item in package.Cards)
         {
             if (added >= requested) break;
-            if (existingPackageCards.Contains(item.Id))
+            if (await PackageCardExistsAsync(connection, transaction, userId, package.Id, item.Id))
             {
                 skippedDuplicate++;
                 continue;
             }
 
             var card = item.ToFlashCard(package.Id);
-            if (existingSignatures.Contains(CardSignature(card)))
+            if (await CardSignatureExistsAsync(connection, transaction, userId, CardSignature(card)))
             {
                 skippedDuplicate++;
                 continue;
             }
 
-            await InsertCardAsync(connection, transaction, userId, card);
-            existingPackageCards.Add(item.Id);
-            existingSignatures.Add(CardSignature(card));
-            added++;
+            if (await InsertCardIfNewAsync(connection, transaction, userId, card))
+            {
+                await ApplyCardSummaryChangeAsync(connection, transaction, userId, null, card);
+                added++;
+            }
+            else
+            {
+                skippedDuplicate++;
+            }
         }
 
         await transaction.CommitAsync();
@@ -920,7 +1153,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         command.CommandText = """
             SELECT
                 u.id,
-                COALESCE(card_counts.total_cards, 0)::int,
+                COALESCE(s.active_cards, 0)::int,
                 COALESCE(card_counts.due_cards, 0)::int,
                 COALESCE(a.request_count, 0)::int,
                 CASE
@@ -934,12 +1167,11 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                 COALESCE(a.ai_dictionary, 0)::int,
                 COALESCE(a.ai_correction, 0)::int
             FROM app_users u
+            LEFT JOIN app_user_deck_summaries s ON s.user_id = u.id
             LEFT JOIN LATERAL (
-                SELECT
-                    COUNT(*) FILTER (WHERE NOT is_archived)::int AS total_cards,
-                    COUNT(*) FILTER (WHERE NOT is_archived AND (next_review_at AT TIME ZONE 'UTC')::date <= @today)::int AS due_cards
-                FROM app_cards c
-                WHERE c.user_id = u.id
+                SELECT COALESCE(SUM(active_count), 0)::int AS due_cards
+                FROM app_card_due_buckets b
+                WHERE b.user_id = u.id AND b.due_date <= @today
             ) card_counts ON true
             LEFT JOIN app_user_daily_activity a
                 ON a.user_id = u.id AND a.activity_date = @today
@@ -1008,6 +1240,217 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         command.Parameters.AddWithValue("id", userId);
         command.Parameters.AddWithValue("sent_at", sentAt);
         await command.ExecuteNonQueryAsync();
+    }
+
+    public async Task<List<ReminderCandidate>> GetDueReminderCandidatesAsync(DateTimeOffset now, int defaultReminderHour)
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT u.id, u.source, u.display_name, u.telegram_id, u.telegram_username, u.telegram_chat_id,
+                   u.is_active, u.plan, u.features::text, u.access_code, u.language_level, u.reminders_enabled,
+                   u.reminder_hour, u.last_reminder_at, u.created_at, u.last_seen_at,
+                   SUM(b.active_count)::int AS due_cards
+            FROM app_users u
+            JOIN app_card_due_buckets b ON b.user_id = u.id AND b.due_date <= @today
+            WHERE u.is_active = true
+              AND u.reminders_enabled = true
+              AND u.telegram_chat_id IS NOT NULL
+              AND COALESCE(u.reminder_hour, @default_hour) = @hour
+              AND (u.last_reminder_at IS NULL OR u.last_reminder_at < @today_start)
+            GROUP BY u.id, u.source, u.display_name, u.telegram_id, u.telegram_username, u.telegram_chat_id,
+                     u.is_active, u.plan, u.features, u.access_code, u.language_level, u.reminders_enabled,
+                     u.reminder_hour, u.last_reminder_at, u.created_at, u.last_seen_at;
+            """;
+        command.Parameters.AddWithValue("today", DateOnly.FromDateTime(now.UtcDateTime));
+        command.Parameters.AddWithValue("default_hour", defaultReminderHour);
+        command.Parameters.AddWithValue("hour", now.Hour);
+        command.Parameters.AddWithValue("today_start", LeitnerSchedule.TodayUtc(now));
+        var candidates = new List<ReminderCandidate>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            candidates.Add(new ReminderCandidate(ReadUser(reader), reader.GetInt32(16)));
+        }
+        return candidates;
+    }
+
+    public async Task<BroadcastJob> QueueBroadcastAsync(AdminBroadcastRequest request)
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        var job = new BroadcastJob { Id = Guid.NewGuid(), Message = request.Message.Trim(), CreatedAt = DateTimeOffset.UtcNow };
+
+        await using (var create = connection.CreateCommand())
+        {
+            create.Transaction = transaction;
+            create.CommandText = "INSERT INTO app_broadcast_jobs (id, message, status, created_at) VALUES (@id, @message, 'queued', @created_at);";
+            create.Parameters.AddWithValue("id", job.Id);
+            create.Parameters.AddWithValue("message", job.Message);
+            create.Parameters.AddWithValue("created_at", job.CreatedAt);
+            await create.ExecuteNonQueryAsync();
+        }
+
+        await using (var count = connection.CreateCommand())
+        {
+            count.Transaction = transaction;
+            var filter = AddBroadcastFilter(count, request, "u");
+            count.CommandText = $"SELECT COUNT(*)::int FROM app_users u WHERE {filter};";
+            job.Matched = (int)(await count.ExecuteScalarAsync() ?? 0);
+        }
+
+        int reachable;
+        await using (var recipients = connection.CreateCommand())
+        {
+            recipients.Transaction = transaction;
+            var filter = AddBroadcastFilter(recipients, request, "u");
+            recipients.CommandText = $"""
+                INSERT INTO app_broadcast_recipients (job_id, user_id, chat_id, status, attempts, next_attempt_at)
+                SELECT @job_id, u.id, u.telegram_chat_id, 'pending', 0, now()
+                FROM app_users u
+                WHERE {filter} AND u.telegram_chat_id IS NOT NULL;
+                """;
+            recipients.Parameters.AddWithValue("job_id", job.Id);
+            reachable = await recipients.ExecuteNonQueryAsync();
+        }
+
+        job.Skipped = Math.Max(0, job.Matched - reachable);
+        await using (var update = connection.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = "UPDATE app_broadcast_jobs SET matched = @matched, skipped = @skipped WHERE id = @id;";
+            update.Parameters.AddWithValue("matched", job.Matched);
+            update.Parameters.AddWithValue("skipped", job.Skipped);
+            update.Parameters.AddWithValue("id", job.Id);
+            await update.ExecuteNonQueryAsync();
+        }
+        await transaction.CommitAsync();
+        return job;
+    }
+
+    public async Task<List<BroadcastJob>> GetBroadcastJobsAsync(int limit = 20)
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, message, status, matched, sent, skipped, failed, created_at, started_at, completed_at
+            FROM app_broadcast_jobs
+            ORDER BY created_at DESC
+            LIMIT @limit;
+            """;
+        command.Parameters.AddWithValue("limit", Math.Clamp(limit, 1, 100));
+        var jobs = new List<BroadcastJob>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) jobs.Add(ReadBroadcastJob(reader));
+        return jobs;
+    }
+
+    public async Task<List<BroadcastDelivery>> ClaimBroadcastDeliveriesAsync(int batchSize)
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            WITH candidates AS (
+                SELECT r.job_id, r.user_id
+                FROM app_broadcast_recipients r
+                JOIN app_broadcast_jobs j ON j.id = r.job_id
+                WHERE j.status IN ('queued', 'running')
+                  AND ((r.status = 'pending' AND r.next_attempt_at <= now())
+                       OR (r.status = 'sending' AND r.next_attempt_at <= now()))
+                ORDER BY j.created_at, r.next_attempt_at
+                FOR UPDATE OF r SKIP LOCKED
+                LIMIT @limit
+            ), claimed AS (
+                UPDATE app_broadcast_recipients r
+                SET status = 'sending', attempts = attempts + 1, next_attempt_at = now() + interval '5 minutes'
+                FROM candidates c
+                WHERE r.job_id = c.job_id AND r.user_id = c.user_id
+                RETURNING r.job_id, r.user_id, r.chat_id, r.attempts
+            )
+            SELECT c.job_id, c.user_id, c.chat_id, j.message, c.attempts
+            FROM claimed c
+            JOIN app_broadcast_jobs j ON j.id = c.job_id;
+            """;
+        command.Parameters.AddWithValue("limit", Math.Clamp(batchSize, 1, 100));
+        var deliveries = new List<BroadcastDelivery>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            deliveries.Add(new BroadcastDelivery(reader.GetGuid(0), reader.GetString(1), reader.GetInt64(2), reader.GetString(3), reader.GetInt32(4)));
+        }
+        await reader.DisposeAsync();
+        if (deliveries.Count > 0)
+        {
+            await using var start = connection.CreateCommand();
+            start.Transaction = transaction;
+            start.CommandText = "UPDATE app_broadcast_jobs SET status = 'running', started_at = COALESCE(started_at, now()) WHERE id = ANY(@ids);";
+            start.Parameters.AddWithValue("ids", deliveries.Select(item => item.JobId).Distinct().ToArray());
+            await start.ExecuteNonQueryAsync();
+        }
+        await transaction.CommitAsync();
+        return deliveries;
+    }
+
+    public async Task CompleteBroadcastDeliveryAsync(BroadcastDelivery delivery, bool sent, string? error)
+    {
+        await EnsureReadyAsync();
+        await using var connection = await DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        string status;
+        await using (var update = connection.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = """
+                UPDATE app_broadcast_recipients
+                SET status = CASE
+                        WHEN @sent THEN 'sent'
+                        WHEN attempts >= 4 THEN 'failed'
+                        ELSE 'pending'
+                    END,
+                    next_attempt_at = CASE
+                        WHEN @sent OR attempts >= 4 THEN now()
+                        ELSE now() + make_interval(secs => LEAST(300, 10 * attempts * attempts))
+                    END,
+                    last_error = @error
+                WHERE job_id = @job_id AND user_id = @user_id
+                RETURNING status;
+                """;
+            update.Parameters.AddWithValue("sent", sent);
+            update.Parameters.AddWithValue("error", error ?? string.Empty);
+            update.Parameters.AddWithValue("job_id", delivery.JobId);
+            update.Parameters.AddWithValue("user_id", delivery.UserId);
+            status = (string?)await update.ExecuteScalarAsync() ?? "pending";
+        }
+
+        if (status is "sent" or "failed")
+        {
+            await using var totals = connection.CreateCommand();
+            totals.Transaction = transaction;
+            totals.CommandText = """
+                UPDATE app_broadcast_jobs
+                SET sent = sent + @sent_delta,
+                    failed = failed + @failed_delta
+                WHERE id = @job_id;
+                UPDATE app_broadcast_jobs j
+                SET status = 'completed', completed_at = now()
+                WHERE j.id = @job_id
+                  AND NOT EXISTS (
+                      SELECT 1 FROM app_broadcast_recipients r
+                      WHERE r.job_id = j.id AND r.status IN ('pending', 'sending')
+                  );
+                """;
+            totals.Parameters.AddWithValue("sent_delta", status == "sent" ? 1 : 0);
+            totals.Parameters.AddWithValue("failed_delta", status == "failed" ? 1 : 0);
+            totals.Parameters.AddWithValue("job_id", delivery.JobId);
+            await totals.ExecuteNonQueryAsync();
+        }
+        await transaction.CommitAsync();
     }
 
     public async ValueTask DisposeAsync()
@@ -1089,14 +1532,55 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
             INSERT INTO app_cards
                 (id, user_id, front, back, example, prompt, answer, notes, type, box,
                  total_reviews, correct_reviews, created_at, next_review_at, last_reviewed_at,
-                 is_archived, source_package_id, source_package_card_id)
+                 is_archived, source_package_id, source_package_card_id, card_signature)
             VALUES
                 (@id, @user_id, @front, @back, @example, @prompt, @answer, @notes, @type, @box,
                  @total_reviews, @correct_reviews, @created_at, @next_review_at, @last_reviewed_at,
-                 @is_archived, @source_package_id, @source_package_card_id);
+                 @is_archived, @source_package_id, @source_package_card_id, @card_signature);
             """;
-        AddCardParameters(command, userId, card);
+        AddCardParameters(command.Parameters, userId, card);
         await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task<bool> InsertCardIfNewAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string userId, FlashCard card)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO app_cards
+                (id, user_id, front, back, example, prompt, answer, notes, type, box,
+                 total_reviews, correct_reviews, created_at, next_review_at, last_reviewed_at,
+                 is_archived, source_package_id, source_package_card_id, card_signature)
+            VALUES
+                (@id, @user_id, @front, @back, @example, @prompt, @answer, @notes, @type, @box,
+                 @total_reviews, @correct_reviews, @created_at, @next_review_at, @last_reviewed_at,
+                 @is_archived, @source_package_id, @source_package_card_id, @card_signature)
+            ON CONFLICT DO NOTHING;
+            """;
+        AddCardParameters(command.Parameters, userId, card);
+        return await command.ExecuteNonQueryAsync() > 0;
+    }
+
+    private static async Task<int> InsertImportBatchAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string userId, IReadOnlyCollection<FlashCard> cards)
+    {
+        await using var batch = new NpgsqlBatch(connection, transaction);
+        foreach (var card in cards)
+        {
+            var command = new NpgsqlBatchCommand("""
+                INSERT INTO app_cards
+                    (id, user_id, front, back, example, prompt, answer, notes, type, box,
+                     total_reviews, correct_reviews, created_at, next_review_at, last_reviewed_at,
+                     is_archived, source_package_id, source_package_card_id, card_signature)
+                VALUES
+                    (@id, @user_id, @front, @back, @example, @prompt, @answer, @notes, @type, @box,
+                     @total_reviews, @correct_reviews, @created_at, @next_review_at, @last_reviewed_at,
+                     @is_archived, @source_package_id, @source_package_card_id, @card_signature)
+                ON CONFLICT DO NOTHING;
+                """);
+            AddCardParameters(command.Parameters, userId, card);
+            batch.BatchCommands.Add(command);
+        }
+        return await batch.ExecuteNonQueryAsync();
     }
 
     private static async Task UpdateCardRowAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string userId, FlashCard card)
@@ -1120,10 +1604,11 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
                 last_reviewed_at = @last_reviewed_at,
                 is_archived = @is_archived,
                 source_package_id = @source_package_id,
-                source_package_card_id = @source_package_card_id
+                source_package_card_id = @source_package_card_id,
+                card_signature = @card_signature
             WHERE id = @id AND user_id = @user_id;
             """;
-        AddCardParameters(command, userId, card);
+        AddCardParameters(command.Parameters, userId, card);
         await command.ExecuteNonQueryAsync();
     }
 
@@ -1245,21 +1730,261 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
     private static string NormalizeText(string value) => new((value ?? string.Empty).Trim().ToLowerInvariant().Where(ch => !char.IsWhiteSpace(ch)).ToArray());
     private static string Slug(string value) => NormalizePlanId(value);
 
-    private static async Task<HashSet<Guid>> GetCardIdsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string userId)
+    private static IReadOnlyDictionary<int, int> EmptyBoxes() => new Dictionary<int, int>
+    {
+        [1] = 0, [2] = 0, [3] = 0, [4] = 0, [5] = 0
+    };
+
+    private static FlashCard CloneCard(FlashCard card) => new()
+    {
+        Id = card.Id, Front = card.Front, Back = card.Back, Example = card.Example, Prompt = card.Prompt,
+        Answer = card.Answer, Notes = card.Notes, Type = card.Type, Box = card.Box,
+        TotalReviews = card.TotalReviews, CorrectReviews = card.CorrectReviews, CreatedAt = card.CreatedAt,
+        NextReviewAt = card.NextReviewAt, LastReviewedAt = card.LastReviewedAt, IsArchived = card.IsArchived,
+        SourcePackageId = card.SourcePackageId, SourcePackageCardId = card.SourcePackageCardId
+    };
+
+    private static async Task EnsureDeckSummaryAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string userId)
+    {
+        await using (var exists = connection.CreateCommand())
+        {
+            exists.Transaction = transaction;
+            exists.CommandText = "SELECT EXISTS(SELECT 1 FROM app_user_deck_summaries WHERE user_id = @user_id);";
+            exists.Parameters.AddWithValue("user_id", userId);
+            if ((bool)(await exists.ExecuteScalarAsync() ?? false)) return;
+        }
+
+        await using var summary = connection.CreateCommand();
+        summary.Transaction = transaction;
+        summary.CommandText = """
+            INSERT INTO app_user_deck_summaries
+                (user_id, total_cards, active_cards, archived_cards, due_cards,
+                 box_1_count, box_2_count, box_3_count, box_4_count, box_5_count,
+                 total_reviews, correct_reviews, last_reviewed_at, updated_at)
+            SELECT @user_id,
+                   COUNT(*)::int,
+                   COUNT(*) FILTER (WHERE NOT is_archived)::int,
+                   COUNT(*) FILTER (WHERE is_archived)::int,
+                   0,
+                   COUNT(*) FILTER (WHERE NOT is_archived AND box = 1)::int,
+                   COUNT(*) FILTER (WHERE NOT is_archived AND box = 2)::int,
+                   COUNT(*) FILTER (WHERE NOT is_archived AND box = 3)::int,
+                   COUNT(*) FILTER (WHERE NOT is_archived AND box = 4)::int,
+                   COUNT(*) FILTER (WHERE NOT is_archived AND box >= 5)::int,
+                   COALESCE(SUM(total_reviews) FILTER (WHERE NOT is_archived), 0),
+                   COALESCE(SUM(correct_reviews) FILTER (WHERE NOT is_archived), 0),
+                   MAX(last_reviewed_at) FILTER (WHERE NOT is_archived), now()
+            FROM app_cards
+            WHERE user_id = @user_id
+            ON CONFLICT (user_id) DO NOTHING;
+            """;
+        summary.Parameters.AddWithValue("user_id", userId);
+        if (await summary.ExecuteNonQueryAsync() == 0) return;
+
+        await using var buckets = connection.CreateCommand();
+        buckets.Transaction = transaction;
+        buckets.CommandText = """
+            INSERT INTO app_card_due_buckets (user_id, due_date, active_count)
+            SELECT user_id, (next_review_at AT TIME ZONE 'UTC')::date, COUNT(*)::int
+            FROM app_cards
+            WHERE user_id = @user_id AND is_archived = false
+            GROUP BY user_id, (next_review_at AT TIME ZONE 'UTC')::date
+            ON CONFLICT (user_id, due_date) DO NOTHING;
+            """;
+        buckets.Parameters.AddWithValue("user_id", userId);
+        await buckets.ExecuteNonQueryAsync();
+    }
+
+    private static async Task ResetDeckSummaryAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string userId)
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = "SELECT id FROM app_cards WHERE user_id = @user_id;";
+        command.CommandText = """
+            UPDATE app_user_deck_summaries
+            SET total_cards = 0, active_cards = 0, archived_cards = 0, due_cards = 0,
+                box_1_count = 0, box_2_count = 0, box_3_count = 0, box_4_count = 0, box_5_count = 0,
+                total_reviews = 0, correct_reviews = 0, last_reviewed_at = NULL, updated_at = now()
+            WHERE user_id = @user_id;
+            DELETE FROM app_card_due_buckets WHERE user_id = @user_id;
+            """;
         command.Parameters.AddWithValue("user_id", userId);
+        await command.ExecuteNonQueryAsync();
+    }
 
-        var ids = new HashSet<Guid>();
-        await using var reader = await command.ExecuteReaderAsync();
-        while (await reader.ReadAsync())
+    private static async Task RebuildDeckSummaryAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string userId)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO app_user_deck_summaries
+                (user_id, total_cards, active_cards, archived_cards, due_cards,
+                 box_1_count, box_2_count, box_3_count, box_4_count, box_5_count,
+                 total_reviews, correct_reviews, last_reviewed_at, updated_at)
+            SELECT @user_id,
+                   COUNT(*)::int,
+                   COUNT(*) FILTER (WHERE NOT is_archived)::int,
+                   COUNT(*) FILTER (WHERE is_archived)::int,
+                   0,
+                   COUNT(*) FILTER (WHERE NOT is_archived AND box = 1)::int,
+                   COUNT(*) FILTER (WHERE NOT is_archived AND box = 2)::int,
+                   COUNT(*) FILTER (WHERE NOT is_archived AND box = 3)::int,
+                   COUNT(*) FILTER (WHERE NOT is_archived AND box = 4)::int,
+                   COUNT(*) FILTER (WHERE NOT is_archived AND box >= 5)::int,
+                   COALESCE(SUM(total_reviews) FILTER (WHERE NOT is_archived), 0),
+                   COALESCE(SUM(correct_reviews) FILTER (WHERE NOT is_archived), 0),
+                   MAX(last_reviewed_at) FILTER (WHERE NOT is_archived), now()
+            FROM app_cards WHERE user_id = @user_id
+            ON CONFLICT (user_id) DO UPDATE SET
+                total_cards = EXCLUDED.total_cards,
+                active_cards = EXCLUDED.active_cards,
+                archived_cards = EXCLUDED.archived_cards,
+                due_cards = EXCLUDED.due_cards,
+                box_1_count = EXCLUDED.box_1_count,
+                box_2_count = EXCLUDED.box_2_count,
+                box_3_count = EXCLUDED.box_3_count,
+                box_4_count = EXCLUDED.box_4_count,
+                box_5_count = EXCLUDED.box_5_count,
+                total_reviews = EXCLUDED.total_reviews,
+                correct_reviews = EXCLUDED.correct_reviews,
+                last_reviewed_at = EXCLUDED.last_reviewed_at,
+                updated_at = now();
+            DELETE FROM app_card_due_buckets WHERE user_id = @user_id;
+            INSERT INTO app_card_due_buckets (user_id, due_date, active_count)
+            SELECT user_id, (next_review_at AT TIME ZONE 'UTC')::date, COUNT(*)::int
+            FROM app_cards
+            WHERE user_id = @user_id AND is_archived = false
+            GROUP BY user_id, (next_review_at AT TIME ZONE 'UTC')::date;
+            """;
+        command.Parameters.AddWithValue("user_id", userId);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task ApplyCardSummaryChangeAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string userId, FlashCard? before, FlashCard? after)
+    {
+        await using var summary = connection.CreateCommand();
+        summary.Transaction = transaction;
+        summary.CommandText = """
+            UPDATE app_user_deck_summaries
+            SET total_cards = total_cards + @total_delta,
+                active_cards = active_cards + @active_delta,
+                archived_cards = archived_cards + @archived_delta,
+                box_1_count = box_1_count + @box_1_delta,
+                box_2_count = box_2_count + @box_2_delta,
+                box_3_count = box_3_count + @box_3_delta,
+                box_4_count = box_4_count + @box_4_delta,
+                box_5_count = box_5_count + @box_5_delta,
+                total_reviews = total_reviews + @total_reviews_delta,
+                correct_reviews = correct_reviews + @correct_reviews_delta,
+                last_reviewed_at = CASE
+                    WHEN @last_reviewed_at IS NULL THEN last_reviewed_at
+                    WHEN last_reviewed_at IS NULL THEN @last_reviewed_at
+                    ELSE GREATEST(last_reviewed_at, @last_reviewed_at)
+                END,
+                updated_at = now()
+            WHERE user_id = @user_id;
+            """;
+        summary.Parameters.AddWithValue("user_id", userId);
+        summary.Parameters.AddWithValue("total_delta", (after is null ? 0 : 1) - (before is null ? 0 : 1));
+        summary.Parameters.AddWithValue("active_delta", Active(after) - Active(before));
+        summary.Parameters.AddWithValue("archived_delta", Archived(after) - Archived(before));
+        for (var box = 1; box <= 5; box++) summary.Parameters.AddWithValue($"box_{box}_delta", BoxDelta(before, after, box));
+        summary.Parameters.AddWithValue("total_reviews_delta", Active(after) * (after?.TotalReviews ?? 0) - Active(before) * (before?.TotalReviews ?? 0));
+        summary.Parameters.AddWithValue("correct_reviews_delta", Active(after) * (after?.CorrectReviews ?? 0) - Active(before) * (before?.CorrectReviews ?? 0));
+        summary.Parameters.Add("last_reviewed_at", NpgsqlDbType.TimestampTz).Value = (object?)after?.LastReviewedAt ?? DBNull.Value;
+        await summary.ExecuteNonQueryAsync();
+
+        if (Active(before) == 1) await AdjustDueBucketAsync(connection, transaction, userId, before!.NextReviewAt, -1);
+        if (Active(after) == 1) await AdjustDueBucketAsync(connection, transaction, userId, after!.NextReviewAt, 1);
+    }
+
+    private static async Task AdjustDueBucketAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string userId, DateTimeOffset dueAt, int delta)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO app_card_due_buckets (user_id, due_date, active_count)
+            VALUES (@user_id, @due_date, @delta)
+            ON CONFLICT (user_id, due_date) DO UPDATE
+            SET active_count = app_card_due_buckets.active_count + EXCLUDED.active_count;
+            DELETE FROM app_card_due_buckets WHERE user_id = @user_id AND active_count <= 0;
+            """;
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("due_date", DateOnly.FromDateTime(dueAt.UtcDateTime));
+        command.Parameters.AddWithValue("delta", delta);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static int Active(FlashCard? card) => card is null || card.IsArchived ? 0 : 1;
+    private static int Archived(FlashCard? card) => card is { IsArchived: true } ? 1 : 0;
+    private static int BoxDelta(FlashCard? before, FlashCard? after, int box) =>
+        (Active(after) == 1 && Math.Clamp(after!.Box, 1, 5) == box ? 1 : 0)
+        - (Active(before) == 1 && Math.Clamp(before!.Box, 1, 5) == box ? 1 : 0);
+
+    private static async Task<bool> PackageCardExistsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string userId, string packageId, string packageCardId)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM app_cards WHERE user_id = @user_id AND source_package_id = @package_id AND source_package_card_id = @card_id);";
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("package_id", packageId);
+        command.Parameters.AddWithValue("card_id", packageCardId);
+        return (bool)(await command.ExecuteScalarAsync() ?? false);
+    }
+
+    private static async Task<bool> CardSignatureExistsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string userId, string signature)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT EXISTS(
+                SELECT 1 FROM app_cards
+                WHERE user_id = @user_id
+                  AND (card_signature = @signature
+                       OR (card_signature = '' AND (type || ':' || lower(regexp_replace(front, '\\s+', '', 'g'))) = @signature))
+            );
+            """;
+        command.Parameters.AddWithValue("user_id", userId);
+        command.Parameters.AddWithValue("signature", signature);
+        return (bool)(await command.ExecuteScalarAsync() ?? false);
+    }
+
+    private static string AddBroadcastFilter(NpgsqlCommand command, AdminBroadcastRequest request, string alias)
+    {
+        if (request.Audience.Equals("selected", StringComparison.OrdinalIgnoreCase))
         {
-            ids.Add(reader.GetGuid(0));
+            var ids = request.UserIds?.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToArray() ?? [];
+            command.Parameters.AddWithValue("user_ids", ids);
+            return $"{alias}.id = ANY(@user_ids)";
         }
+        if (request.Audience.Equals("all", StringComparison.OrdinalIgnoreCase)) return "true";
 
-        return ids;
+        var conditions = new List<string>();
+        if (!string.IsNullOrWhiteSpace(request.Plan))
+        {
+            command.Parameters.AddWithValue("plan", request.Plan.Trim());
+            conditions.Add($"{alias}.plan = @plan");
+        }
+        if (request.IsActive.HasValue)
+        {
+            command.Parameters.AddWithValue("is_active", request.IsActive.Value);
+            conditions.Add($"{alias}.is_active = @is_active");
+        }
+        if (!string.IsNullOrWhiteSpace(request.Source))
+        {
+            command.Parameters.AddWithValue("source", request.Source.Trim());
+            conditions.Add($"{alias}.source = @source");
+        }
+        if (!string.IsNullOrWhiteSpace(request.AccessCode))
+        {
+            command.Parameters.AddWithValue("access_code", request.AccessCode.Trim());
+            conditions.Add($"{alias}.access_code = @access_code");
+        }
+        if (!string.IsNullOrWhiteSpace(request.Search))
+        {
+            command.Parameters.AddWithValue("search", $"%{request.Search.Trim()}%");
+            conditions.Add($"({alias}.id ILIKE @search OR {alias}.display_name ILIKE @search OR {alias}.telegram_id ILIKE @search OR {alias}.telegram_username ILIKE @search)");
+        }
+        return conditions.Count == 0 ? "true" : string.Join(" AND ", conditions);
     }
 
     private static async Task<AccessCode?> FindAccessCodeAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, string code)
@@ -1347,26 +2072,41 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         CreatedAt = reader.GetFieldValue<DateTimeOffset>(14)
     };
 
-    private static void AddCardParameters(NpgsqlCommand command, string userId, FlashCard card)
+    private static BroadcastJob ReadBroadcastJob(NpgsqlDataReader reader) => new()
     {
-        command.Parameters.AddWithValue("id", card.Id);
-        command.Parameters.AddWithValue("user_id", userId);
-        command.Parameters.AddWithValue("front", card.Front);
-        command.Parameters.AddWithValue("back", card.Back);
-        command.Parameters.AddWithValue("example", card.Example);
-        command.Parameters.AddWithValue("prompt", card.Prompt);
-        command.Parameters.AddWithValue("answer", card.Answer);
-        command.Parameters.AddWithValue("notes", card.Notes);
-        command.Parameters.AddWithValue("type", card.Type.ToString());
-        command.Parameters.AddWithValue("box", card.Box);
-        command.Parameters.AddWithValue("total_reviews", card.TotalReviews);
-        command.Parameters.AddWithValue("correct_reviews", card.CorrectReviews);
-        command.Parameters.AddWithValue("created_at", card.CreatedAt);
-        command.Parameters.AddWithValue("next_review_at", card.NextReviewAt);
-        command.Parameters.Add("last_reviewed_at", NpgsqlDbType.TimestampTz).Value = (object?)card.LastReviewedAt ?? DBNull.Value;
-        command.Parameters.AddWithValue("is_archived", card.IsArchived);
-        command.Parameters.AddWithValue("source_package_id", card.SourcePackageId ?? string.Empty);
-        command.Parameters.AddWithValue("source_package_card_id", card.SourcePackageCardId ?? string.Empty);
+        Id = reader.GetGuid(0),
+        Message = reader.GetString(1),
+        Status = reader.GetString(2),
+        Matched = reader.GetInt32(3),
+        Sent = reader.GetInt32(4),
+        Skipped = reader.GetInt32(5),
+        Failed = reader.GetInt32(6),
+        CreatedAt = reader.GetFieldValue<DateTimeOffset>(7),
+        StartedAt = reader.IsDBNull(8) ? null : reader.GetFieldValue<DateTimeOffset>(8),
+        CompletedAt = reader.IsDBNull(9) ? null : reader.GetFieldValue<DateTimeOffset>(9)
+    };
+
+    private static void AddCardParameters(NpgsqlParameterCollection parameters, string userId, FlashCard card)
+    {
+        parameters.AddWithValue("id", card.Id);
+        parameters.AddWithValue("user_id", userId);
+        parameters.AddWithValue("front", card.Front);
+        parameters.AddWithValue("back", card.Back);
+        parameters.AddWithValue("example", card.Example);
+        parameters.AddWithValue("prompt", card.Prompt);
+        parameters.AddWithValue("answer", card.Answer);
+        parameters.AddWithValue("notes", card.Notes);
+        parameters.AddWithValue("type", card.Type.ToString());
+        parameters.AddWithValue("box", card.Box);
+        parameters.AddWithValue("total_reviews", card.TotalReviews);
+        parameters.AddWithValue("correct_reviews", card.CorrectReviews);
+        parameters.AddWithValue("created_at", card.CreatedAt);
+        parameters.AddWithValue("next_review_at", card.NextReviewAt);
+        parameters.Add("last_reviewed_at", NpgsqlDbType.TimestampTz).Value = (object?)card.LastReviewedAt ?? DBNull.Value;
+        parameters.AddWithValue("is_archived", card.IsArchived);
+        parameters.AddWithValue("source_package_id", card.SourcePackageId ?? string.Empty);
+        parameters.AddWithValue("source_package_card_id", card.SourcePackageCardId ?? string.Empty);
+        parameters.AddWithValue("card_signature", CardSignature(card));
     }
 
     private static void AddAccessCodeParameters(NpgsqlCommand command, AccessCode code)

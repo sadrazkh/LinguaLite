@@ -15,6 +15,11 @@ const state = {
   due: [],
   cards: [],
   archivedCards: [],
+  summary: null,
+  cardPages: {
+    active: { currentCursor: null, nextCursor: null, hasMore: false, history: [], page: 1 },
+    archived: { currentCursor: null, nextCursor: null, hasMore: false, history: [], page: 1 }
+  },
   packages: [],
   deckMode: "active",
   selectedBoxes: new Set(),
@@ -66,6 +71,10 @@ const elements = {
   cancelEditButton: $("#cancelEditButton"),
   boxes: $("#boxes"),
   deckList: $("#deckList"),
+  deckPagination: $("#deckPagination"),
+  deckPreviousButton: $("#deckPreviousButton"),
+  deckNextButton: $("#deckNextButton"),
+  deckPageText: $("#deckPageText"),
   packagesList: $("#packagesList"),
   deckModeSelector: $("#deckModeSelector"),
   toast: $("#toast"),
@@ -254,9 +263,12 @@ function bindEvents() {
   document.querySelectorAll('input[name="deckMode"]').forEach((radio) => {
     radio.addEventListener("change", () => {
       state.deckMode = radio.value;
-      renderDeckSection();
+      if (state.deckMode === "packages") renderDeckSection();
+      else loadCardPage(state.deckMode);
     });
   });
+  elements.deckPreviousButton.addEventListener("click", () => loadPreviousCardPage());
+  elements.deckNextButton.addEventListener("click", () => loadNextCardPage());
   elements.browserLoginForm.addEventListener("submit", browserLogin);
   setupOtpInputs();
   elements.form.addEventListener("submit", saveCard);
@@ -308,7 +320,7 @@ async function loadAll() {
     const config = await fetchJson("/api/config");
     LinguaOffline.setAccount(config.userId);
     if (navigator.onLine) await syncPendingChanges();
-    const [summary, due, cards, archivedCards, packages] = await Promise.all([
+    const [summary, due, cardsPage, archivedCardsPage, packages] = await Promise.all([
       fetchJson("/api/deck"),
       fetchJson("/api/cards/due"),
       fetchJson("/api/cards"),
@@ -316,8 +328,8 @@ async function loadAll() {
       fetchJson("/api/packages")
     ]);
 
-    applyLoadedData({ config, summary, due, cards, archivedCards, packages });
-    await LinguaOffline.saveSnapshot({ config, cards, archivedCards, packages });
+    applyLoadedData({ config, summary, due, cards: cardsPage.items || [], archivedCards: archivedCardsPage.items || [], packages, cardsPage, archivedCardsPage });
+    await LinguaOffline.saveSnapshot({ config, summary, due, cards: cardsPage.items || [], archivedCards: archivedCardsPage.items || [], packages, cardsPage, archivedCardsPage });
     state.offline = false;
     updateConnectionStatus();
   } catch (error) {
@@ -338,13 +350,16 @@ async function loadAll() {
   }
 }
 
-function applyLoadedData({ config, summary, due, cards, archivedCards, packages }) {
+function applyLoadedData({ config, summary, due, cards, archivedCards, packages, cardsPage = null, archivedCardsPage = null }) {
   state.config = config;
   document.body.classList.remove("auth-required");
   elements.authGate.hidden = true;
   state.due = due;
   state.cards = cards;
   state.archivedCards = archivedCards;
+  state.summary = summary;
+  applyPageState("active", cardsPage);
+  applyPageState("archived", archivedCardsPage);
   state.packages = packages;
   renderProfile(config);
   renderUserInfo(config);
@@ -358,15 +373,33 @@ function applyLoadedData({ config, summary, due, cards, archivedCards, packages 
 function applyOfflineSnapshot(snapshot) {
   const cards = snapshot.cards || [];
   const archivedCards = snapshot.archivedCards || [];
-  const summary = offlineSummary(cards);
+  const summary = snapshot.summary || offlineSummary(cards);
   applyLoadedData({
     config: snapshot.config,
     summary,
-    due: offlineDueCards(cards),
+    due: snapshot.due || offlineDueCards(cards),
     cards,
     archivedCards,
-    packages: snapshot.packages || []
+    packages: snapshot.packages || [],
+    cardsPage: snapshot.cardsPage,
+    archivedCardsPage: snapshot.archivedCardsPage
   });
+}
+
+function applyPageState(mode, page) {
+  if (!page) return;
+  const target = state.cardPages[mode];
+  if (Array.isArray(page.items)) {
+    target.currentCursor = null;
+    target.history = [];
+    target.page = 1;
+  } else {
+    target.currentCursor = page.currentCursor || null;
+    target.history = page.history || [];
+    target.page = page.page || 1;
+  }
+  target.nextCursor = page.nextCursor || null;
+  target.hasMore = Boolean(page.hasMore);
 }
 
 async function refreshApp() {
@@ -557,7 +590,7 @@ function switchView(viewName) {
   document.querySelectorAll(".view").forEach((view) => {
     view.classList.toggle("active", view.id === `${viewName}View`);
   });
-  if (viewName === "deck") loadAll();
+  if (viewName === "deck" && state.deckMode !== "packages") loadCardPage(state.deckMode, state.cardPages[state.deckMode]?.currentCursor, state.cardPages[state.deckMode]?.history || []);
 }
 
 function updateSummary(summary) {
@@ -989,15 +1022,12 @@ function renderBoxes(boxes) {
 function toggleBoxFilter(box) {
   if (state.selectedBoxes.has(box)) state.selectedBoxes.delete(box);
   else state.selectedBoxes.add(box);
-  renderBoxes(currentBoxesSummary());
-  renderDeckSection();
+  renderBoxes(state.summary?.boxes || {});
+  loadCardPage("active");
 }
 
 function currentBoxesSummary() {
-  return state.cards.reduce((summary, card) => {
-    summary[card.box] = (summary[card.box] || 0) + 1;
-    return summary;
-  }, {});
+  return state.summary?.boxes || {};
 }
 
 function renderDeck(cards) {
@@ -1031,6 +1061,7 @@ function renderDeck(cards) {
 function renderDeckSection() {
   elements.boxes.hidden = state.deckMode !== "active";
   elements.deckList.hidden = state.deckMode === "packages";
+  elements.deckPagination.hidden = state.deckMode === "packages";
   elements.packagesList.hidden = state.deckMode !== "packages";
   if (state.deckMode === "packages") {
     renderPackages();
@@ -1038,10 +1069,56 @@ function renderDeckSection() {
   }
 
   const source = state.deckMode === "archived" ? state.archivedCards : state.cards;
-  const filtered = state.selectedBoxes.size === 0 || state.deckMode === "archived"
-    ? source
-    : source.filter(card => state.selectedBoxes.has(Number(card.box)));
-  renderDeck(filtered, state.deckMode === "archived");
+  renderDeck(source, state.deckMode === "archived");
+  renderDeckPagination();
+}
+
+async function loadCardPage(mode, cursor = null, history = []) {
+  if (mode === "packages") return;
+  if (!navigator.onLine || state.offline) return renderDeckSection();
+  const query = new URLSearchParams({ archived: mode === "archived" ? "true" : "false", limit: "30" });
+  if (cursor) query.set("cursor", cursor);
+  if (mode === "active") [...state.selectedBoxes].forEach((box) => query.append("boxes", String(box)));
+
+  try {
+    const page = await fetchJson(`/api/cards?${query.toString()}`);
+    const target = state.cardPages[mode];
+    target.currentCursor = cursor;
+    target.history = history;
+    target.page = history.length + 1;
+    target.nextCursor = page.nextCursor || null;
+    target.hasMore = Boolean(page.hasMore);
+    if (mode === "active") state.cards = page.items || [];
+    else state.archivedCards = page.items || [];
+    renderDeckSection();
+    await cacheCurrentSnapshot();
+  } catch (error) {
+    showToast(error.message || "کارت‌ها بارگذاری نشدند.");
+  }
+}
+
+function loadNextCardPage() {
+  const mode = state.deckMode;
+  const page = state.cardPages[mode];
+  if (!page?.hasMore || !page.nextCursor) return;
+  loadCardPage(mode, page.nextCursor, [...page.history, page.currentCursor || null]);
+}
+
+function loadPreviousCardPage() {
+  const mode = state.deckMode;
+  const page = state.cardPages[mode];
+  if (!page || page.history.length === 0) return;
+  const history = [...page.history];
+  const cursor = history.pop() || null;
+  loadCardPage(mode, cursor, history);
+}
+
+function renderDeckPagination() {
+  const page = state.cardPages[state.deckMode];
+  if (!page) return;
+  elements.deckPreviousButton.disabled = page.history.length === 0;
+  elements.deckNextButton.disabled = !page.hasMore;
+  elements.deckPageText.textContent = `صفحه ${toPersianNumber(page.page || 1)}`;
 }
 
 function renderDeck(cards, archived = false) {
@@ -1198,7 +1275,9 @@ async function saveCardOffline(payload, isEdit) {
   if (isEdit) {
     const card = [...state.cards, ...state.archivedCards].find((item) => item.id === state.editingCardId);
     if (!card) return showToast("کارت در حافظه آفلاین پیدا نشد.");
+    const before = { ...card };
     Object.assign(card, normalizeCardPayload(payload));
+    applyOfflineSummaryDelta(before, card);
     await queueOfflineOperation({
       method: "PUT",
       url: `/api/cards/${card.id}`,
@@ -1206,7 +1285,7 @@ async function saveCardOffline(payload, isEdit) {
     });
   } else {
     const limit = Number(state.config.effectivePlan?.cardLimit ?? -1);
-    if (!state.config.features?.unlimitedCards && limit > -1 && state.cards.length >= limit) {
+    if (!state.config.features?.unlimitedCards && limit > -1 && Number(state.summary?.activeCards ?? state.summary?.totalCards ?? 0) >= limit) {
       return showToast("سقف کارت‌های پلن فعلی پر شده است؛ برای افزودن کارت باید پلن را ارتقا بدهی.");
     }
     const id = payload.clientId || crypto.randomUUID();
@@ -1224,6 +1303,8 @@ async function saveCardOffline(payload, isEdit) {
       sourcePackageCardId: ""
     };
     state.cards.unshift(card);
+    state.due.unshift(card);
+    applyOfflineSummaryDelta(null, card);
     await queueOfflineOperation({
       method: "POST",
       url: "/api/cards",
@@ -1240,6 +1321,7 @@ async function saveCardOffline(payload, isEdit) {
 }
 
 async function reviewCardOffline(card, remembered) {
+  const before = { ...card };
   const now = new Date();
   card.totalReviews = Number(card.totalReviews || 0) + 1;
   if (remembered) {
@@ -1250,6 +1332,7 @@ async function reviewCardOffline(card, remembered) {
   }
   card.lastReviewedAt = now.toISOString();
   card.nextReviewAt = addUtcDays(utcDateIso(now), offlineDelayDays(card.box));
+  applyOfflineSummaryDelta(before, card);
 
   await queueOfflineOperation({
     method: "PUT",
@@ -1274,8 +1357,12 @@ async function archiveCardOffline(id, archived) {
   const index = source.findIndex((item) => item.id === id);
   if (index < 0) return showToast("کارت در حافظه آفلاین پیدا نشد.");
   const [card] = source.splice(index, 1);
+  const before = { ...card };
   card.isArchived = archived;
   target.unshift(card);
+  state.due = state.due.filter((item) => item.id !== id);
+  if (!archived && (!card.nextReviewAt || card.nextReviewAt.slice(0, 10) <= utcDateIso(new Date()).slice(0, 10))) state.due.unshift(card);
+  applyOfflineSummaryDelta(before, card);
   await queueOfflineOperation({
     method: "POST",
     url: `/api/cards/${id}/archive`,
@@ -1286,8 +1373,11 @@ async function archiveCardOffline(id, archived) {
 }
 
 async function deleteCardOffline(id) {
+  const card = [...state.cards, ...state.archivedCards].find((item) => item.id === id);
   state.cards = state.cards.filter((item) => item.id !== id);
   state.archivedCards = state.archivedCards.filter((item) => item.id !== id);
+  state.due = state.due.filter((item) => item.id !== id);
+  if (card) applyOfflineSummaryDelta(card, null);
   await queueOfflineOperation({ method: "DELETE", url: `/api/cards/${id}` });
   await persistAndRenderOffline();
   showToast("حذف روی دستگاه ثبت شد و بعداً سینک می‌شود.");
@@ -1318,12 +1408,29 @@ async function queueOfflineOperation(operation) {
 async function persistAndRenderOffline() {
   const snapshot = {
     config: state.config,
+    summary: state.summary,
+    due: state.due,
     cards: state.cards,
     archivedCards: state.archivedCards,
-    packages: state.packages
+    packages: state.packages,
+    cardsPage: state.cardPages.active,
+    archivedCardsPage: state.cardPages.archived
   };
   await LinguaOffline.saveSnapshot(snapshot);
   applyOfflineSnapshot(snapshot);
+}
+
+async function cacheCurrentSnapshot() {
+  await LinguaOffline.saveSnapshot({
+    config: state.config,
+    summary: state.summary,
+    due: state.due,
+    cards: state.cards,
+    archivedCards: state.archivedCards,
+    packages: state.packages,
+    cardsPage: state.cardPages.active,
+    archivedCardsPage: state.cardPages.archived
+  });
 }
 
 function offlineSummary(cards) {
@@ -1338,6 +1445,8 @@ function offlineSummary(cards) {
     dueCards: offlineDueCards(cards).length,
     learnedCards: cards.filter((card) => Number(card.box) >= 4).length,
     accuracy: totalReviews ? Math.round((correctReviews / totalReviews) * 1000) / 10 : 0,
+    totalReviews,
+    correctReviews,
     boxes
   };
 }
@@ -1348,6 +1457,34 @@ function offlineDueCards(cards) {
     .filter((card) => !card.isArchived && (!card.nextReviewAt || card.nextReviewAt.slice(0, 10) <= today.slice(0, 10)))
     .sort((left, right) => String(left.nextReviewAt).localeCompare(String(right.nextReviewAt)))
     .slice(0, 25);
+}
+
+function applyOfflineSummaryDelta(before, after) {
+  if (!state.summary) return;
+  const summary = state.summary;
+  const active = (card) => Boolean(card && !card.isArchived);
+  const due = (card) => active(card) && (!card.nextReviewAt || card.nextReviewAt.slice(0, 10) <= utcDateIso(new Date()).slice(0, 10));
+  const delta = (predicate) => (predicate(after) ? 1 : 0) - (predicate(before) ? 1 : 0);
+  const activeDelta = delta(active);
+  summary.totalCards = Number(summary.totalCards || 0) + activeDelta;
+  summary.activeCards = Number(summary.activeCards ?? summary.totalCards) + activeDelta;
+  summary.archivedCards = Number(summary.archivedCards || 0) + delta((card) => Boolean(card?.isArchived));
+  summary.dueCards = Math.max(0, Number(summary.dueCards || 0) + delta(due));
+  summary.boxes = summary.boxes || {};
+  for (let box = 1; box <= 5; box += 1) {
+    const change = delta((card) => active(card) && Number(card.box) === box);
+    summary.boxes[box] = Math.max(0, Number(summary.boxes[box] ?? summary.boxes[String(box)] ?? 0) + change);
+  }
+  summary.totalReviews = Math.max(0, Number(summary.totalReviews || 0)
+    + (active(after) ? Number(after.totalReviews || 0) : 0)
+    - (active(before) ? Number(before.totalReviews || 0) : 0));
+  summary.correctReviews = Math.max(0, Number(summary.correctReviews || 0)
+    + (active(after) ? Number(after.correctReviews || 0) : 0)
+    - (active(before) ? Number(before.correctReviews || 0) : 0));
+  summary.accuracy = summary.totalReviews ? Math.round(summary.correctReviews / summary.totalReviews * 1000) / 10 : 0;
+  summary.learnedCards = Number(summary.boxes[4] || 0) + Number(summary.boxes[5] || 0);
+  updateSummary(summary);
+  renderBoxes(summary.boxes);
 }
 
 function offlineDelayDays(box) {

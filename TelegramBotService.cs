@@ -186,9 +186,9 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
 
     private async Task SendStatusAsync(UserProfile profile, long chatId, AppSettingsState settings)
     {
-        var deck = await store.GetDeckAsync(profile.Id);
-        var activeCards = deck.Cards.Where(card => !card.IsArchived).ToList();
-        var due = activeCards.Count(card => LeitnerSchedule.IsDue(card));
+        var summary = await store.GetDeckSummaryAsync(profile.Id);
+        var activeCards = new { Count = summary.TotalCards };
+        var due = summary.DueCards;
         await SendMessageAsync(chatId,
             $"وضعیت اکانت:\nپلن: {profile.Plan}\nکارت‌ها: {activeCards.Count}\nآماده مرور: {due}\nیادآوری: {(profile.RemindersEnabled ? "روشن" : "خاموش")}",
             settings);
@@ -196,8 +196,7 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
 
     private async Task SendDueAsync(UserProfile profile, long chatId, AppSettingsState settings)
     {
-        var deck = await store.GetDeckAsync(profile.Id);
-        var dueCount = deck.Cards.Count(card => !card.IsArchived && LeitnerSchedule.IsDue(card));
+        var dueCount = (await store.GetDeckSummaryAsync(profile.Id)).DueCards;
         await SendMessageAsync(chatId,
             dueCount == 0 ? "فعلا کارت آماده مرور نداری." : $"امروز {dueCount} کارت برای مرور داری.",
             settings);

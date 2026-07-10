@@ -437,7 +437,17 @@ public sealed record RedeemResult(bool Success, string Message, UserProfile? Pro
     public static RedeemResult Fail(string message) => new(false, message, null);
 }
 
-public sealed record DeckSummary(int TotalCards, int DueCards, int LearnedCards, double Accuracy, IReadOnlyDictionary<int, int> Boxes)
+public sealed record DeckSummary(
+    int TotalCards,
+    int DueCards,
+    int LearnedCards,
+    double Accuracy,
+    IReadOnlyDictionary<int, int> Boxes,
+    int ActiveCards = 0,
+    int ArchivedCards = 0,
+    DateTimeOffset? LastReviewAt = null,
+    long TotalReviews = 0,
+    long CorrectReviews = 0)
 {
     public static DeckSummary From(DeckState state)
     {
@@ -451,7 +461,67 @@ public sealed record DeckSummary(int TotalCards, int DueCards, int LearnedCards,
             activeCards.Count(card => LeitnerSchedule.IsDue(card, now)),
             activeCards.Count(card => card.Box >= 4),
             totalReviews == 0 ? 0 : Math.Round((double)correctReviews / totalReviews * 100, 1),
-            Enumerable.Range(1, 5).ToDictionary(box => box, box => activeCards.Count(card => card.Box == box)));
+            Enumerable.Range(1, 5).ToDictionary(box => box, box => activeCards.Count(card => card.Box == box)),
+            activeCards.Count,
+            state.Cards.Count(card => card.IsArchived),
+            activeCards.Where(card => card.LastReviewedAt.HasValue).MaxBy(card => card.LastReviewedAt)?.LastReviewedAt,
+            totalReviews,
+            correctReviews);
+    }
+}
+
+public sealed record CardPage(List<FlashCard> Items, string? NextCursor, bool HasMore);
+
+public sealed record ReminderCandidate(UserProfile User, int DueCards);
+
+public sealed record PackageProgress(string PackageId, int AddedCards);
+
+public sealed class BroadcastJob
+{
+    public Guid Id { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public string Status { get; set; } = "queued";
+    public int Matched { get; set; }
+    public int Sent { get; set; }
+    public int Skipped { get; set; }
+    public int Failed { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? StartedAt { get; set; }
+    public DateTimeOffset? CompletedAt { get; set; }
+}
+
+public sealed record BroadcastDelivery(Guid JobId, string UserId, long ChatId, string Message, int Attempt);
+
+public static class CardCursor
+{
+    public static string Encode(DateTimeOffset createdAt, Guid id)
+    {
+        var payload = $"{createdAt.UtcTicks}|{id:N}";
+        return Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(payload))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
+
+    public static bool TryDecode(string? cursor, out DateTimeOffset createdAt, out Guid id)
+    {
+        createdAt = default;
+        id = Guid.Empty;
+        if (string.IsNullOrWhiteSpace(cursor)) return false;
+        try
+        {
+            var value = cursor.Replace('-', '+').Replace('_', '/');
+            value = value.PadRight(value.Length + (4 - value.Length % 4) % 4, '=');
+            var parts = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(value)).Split('|', 2);
+            return parts.Length == 2
+                && long.TryParse(parts[0], out var ticks)
+                && Guid.TryParseExact(parts[1], "N", out id)
+                && (createdAt = new DateTimeOffset(ticks, TimeSpan.Zero)) != default;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
 

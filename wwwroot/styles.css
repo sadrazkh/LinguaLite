@@ -1218,6 +1218,17 @@ body.auth-required .view {
   opacity: 1;
 }
 
+.deck-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 14px 0 4px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
 .connection-status {
   min-width: 54px;
   padding: 5px 8px;

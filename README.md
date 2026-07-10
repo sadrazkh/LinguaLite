@@ -2,6 +2,16 @@
 
 LinguaLite یک مینی‌اپ تلگرام و PWA برای یادگیری زبان است. هسته اصلی برنامه لایتنر است، ولی کنار آن کارت فیدبک، دیکشنری هوشمند، اصلاح متن با AI، خروجی/ورودی JSON، پنل ادمین، پلن‌بندی و ربات تلگرام هم دارد.
 
+## Performance Migration
+
+برای دیتابیس PostgreSQL موجود، پیش از deploy نسخه‌ی جدید یک‌بار migration زیر را خارج از transaction اجرا کن:
+
+```powershell
+psql "$env:DATABASE_URL" -f DatabaseMigrations/20260710_performance_scalability.sql
+```
+
+این migration indexهای cursor/due، summaryهای هر کاربر، bucketهای موعد و صف پایدار broadcast را می‌سازد و summary کاربران قبلی را فقط داخل PostgreSQL backfill می‌کند. روی دیتابیس بزرگ زمان اجرای آن به حجم کارت‌ها و I/O سرور وابسته است؛ به‌دلیل `CREATE INDEX CONCURRENTLY` نباید آن را داخل transaction یا migration runnerهای transaction-only اجرا کرد.
+
 ## مسیرهای مهم
 
 ```text

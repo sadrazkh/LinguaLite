@@ -3,6 +3,10 @@ public interface IAppStore
     string ProviderName { get; }
     Task EnsureReadyAsync();
     Task<UserProfile> GetOrCreateUserAsync(UserIdentity identity);
+    Task<DeckSummary> GetDeckSummaryAsync(string userId);
+    Task<CardPage> GetCardsPageAsync(string userId, bool archived, int limit, string? cursor, IReadOnlyCollection<int>? boxes = null);
+    Task<List<FlashCard>> GetDueCardsAsync(string userId, int limit);
+    Task<FlashCard?> GetCardAsync(string userId, Guid cardId);
     Task<DeckState> GetDeckAsync(string userId);
     Task AddCardAsync(string userId, FlashCard card);
     Task<FlashCard?> UpdateCardAsync(string userId, Guid cardId, Action<FlashCard> update);
@@ -19,6 +23,7 @@ public interface IAppStore
     Task<bool> DeletePlanAsync(string id);
     Task<PlanDefinition> GetEffectivePlanAsync(string planName);
     Task<List<LearningPackage>> GetPackagesAsync();
+    Task<List<PackageProgress>> GetPackageProgressAsync(string userId);
     Task<LearningPackage> UpsertPackageAsync(LearningPackage package);
     Task<bool> DeletePackageAsync(string id);
     Task<PackageImportResult> ImportPackageCardsAsync(string userId, string planName, string packageId, int count);
@@ -32,4 +37,9 @@ public interface IAppStore
     Task<AppSettingsState> GetSettingsAsync();
     Task<AppSettingsState> UpdateSettingsAsync(Action<AppSettingsState> update);
     Task MarkReminderSentAsync(string userId, DateTimeOffset sentAt);
+    Task<List<ReminderCandidate>> GetDueReminderCandidatesAsync(DateTimeOffset now, int defaultReminderHour);
+    Task<BroadcastJob> QueueBroadcastAsync(AdminBroadcastRequest request);
+    Task<List<BroadcastJob>> GetBroadcastJobsAsync(int limit = 20);
+    Task<List<BroadcastDelivery>> ClaimBroadcastDeliveriesAsync(int batchSize);
+    Task CompleteBroadcastDeliveryAsync(BroadcastDelivery delivery, bool sent, string? error);
 }

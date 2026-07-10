@@ -57,6 +57,7 @@ const elements = {
   broadcastSelectionText: $("#broadcastSelectionText"),
   broadcastPreview: $("#broadcastPreview"),
   broadcastResult: $("#broadcastResult"),
+  broadcastJobs: $("#broadcastJobs"),
   previewBroadcastButton: $("#previewBroadcastButton"),
   sendBroadcastButton: $("#sendBroadcastButton"),
   customCodeInput: $("#customCodeInput"),
@@ -67,7 +68,7 @@ const elements = {
   toast: $("#toast")
 };
 
-let state = { users: [], metrics: [], plans: [], packages: [], codes: [], codeUsage: [], settings: null, draggingPlanId: null, usersPage: 1, usersPageSize: 10 };
+let state = { users: [], metrics: [], plans: [], packages: [], codes: [], codeUsage: [], broadcastJobs: [], settings: null, draggingPlanId: null, usersPage: 1, usersPageSize: 10 };
 const selectedBroadcastUserIds = new Set();
 const adminTabs = [
   { id: "settings", label: "تنظیمات", count: () => "", panel: () => elements.settingsForm.closest(".panel") },
@@ -117,16 +118,17 @@ async function adminLogin(event) {
 
 async function loadAll() {
   setStatus("در حال بارگذاری...", "");
-  const [users, metrics, codes, codeUsage, plans, packages, settingsPayload] = await Promise.all([
+  const [users, metrics, codes, codeUsage, plans, packages, settingsPayload, broadcastJobs] = await Promise.all([
     adminFetch("/api/admin/users"),
     adminFetch("/api/admin/user-metrics"),
     adminFetch("/api/admin/codes"),
     adminFetch("/api/admin/codes/usage"),
     adminFetch("/api/admin/plans"),
     adminFetch("/api/admin/packages"),
-    adminFetch("/api/admin/settings")
+    adminFetch("/api/admin/settings"),
+    adminFetch("/api/admin/broadcast/jobs")
   ]);
-  state = { ...state, users, metrics, codes, codeUsage, plans, packages, settings: settingsPayload.settings };
+  state = { ...state, users, metrics, codes, codeUsage, plans, packages, broadcastJobs, settings: settingsPayload.settings };
   state.usersPage = Math.min(state.usersPage, getUsersPageCount());
   elements.dashboard.hidden = false;
   elements.logoutButton.hidden = false;
@@ -139,6 +141,7 @@ async function loadAll() {
   renderUsers();
   renderCodes();
   renderBroadcastPreview();
+  renderBroadcastJobs();
   switchAdminTab(state.adminTab || "settings");
 }
 
@@ -527,6 +530,8 @@ async function sendBroadcast() {
       body: JSON.stringify(payload)
     });
     renderBroadcastResult(result);
+    state.broadcastJobs = await adminFetch("/api/admin/broadcast/jobs");
+    renderBroadcastJobs();
     showToast(`ارسال شد: ${toPersianNumber(result.sent)} · رد شد: ${toPersianNumber(result.skipped)} · خطا: ${toPersianNumber(result.failed)}`);
   } catch (error) {
     elements.broadcastResult.hidden = false;
@@ -547,6 +552,21 @@ function renderBroadcastResult(result) {
     <span>هدف: ${toPersianNumber(result.matched)} · ارسال‌شده: ${toPersianNumber(result.sent)} · بدون chat id: ${toPersianNumber(result.skipped)} · خطا: ${toPersianNumber(result.failed)}</span>
     ${errors}
   `;
+}
+
+function renderBroadcastJobs() {
+  const jobs = Array.isArray(state.broadcastJobs) ? state.broadcastJobs : [];
+  elements.broadcastJobs.innerHTML = jobs.length ? jobs.map(job => {
+    const done = Number(job.sent || 0) + Number(job.failed || 0) + Number(job.skipped || 0);
+    const total = Math.max(1, Number(job.matched || 0));
+    const percent = Math.min(100, Math.round(done / total * 100));
+    return `
+      <article class="broadcast-job">
+        <div><strong>${escapeHtml(job.status || "queued")}</strong><small>${toPersianNumber(job.sent || 0)} ارسال · ${toPersianNumber(job.failed || 0)} خطا · ${toPersianNumber(job.skipped || 0)} بدون چت</small></div>
+        <div class="broadcast-job-progress"><i style="width:${percent}%"></i></div>
+      </article>
+    `;
+  }).join("") : "";
 }
 
 function updateBroadcastSelectionFromInput(event) {

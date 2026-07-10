@@ -26,6 +26,7 @@ else
 builder.Services.AddHttpClient<OpenRouterCardService>();
 builder.Services.AddHttpClient<TelegramBotService>();
 builder.Services.AddHostedService<ReminderWorker>();
+builder.Services.AddHostedService<BroadcastWorker>();
 
 var app = builder.Build();
 
@@ -134,8 +135,7 @@ api.MapGet("/deck", async (HttpContext http, IConfiguration config, IAppStore st
     var profile = await RequireUserAsync(http, config, store);
     if (profile is null) return Results.Unauthorized();
 
-    var deck = await store.GetDeckAsync(profile.Id);
-    return Results.Ok(DeckSummary.From(deck));
+    return Results.Ok(await store.GetDeckSummaryAsync(profile.Id));
 });
 
 api.MapGet("/cards/due", async (HttpContext http, IConfiguration config, IAppStore store) =>
@@ -143,28 +143,23 @@ api.MapGet("/cards/due", async (HttpContext http, IConfiguration config, IAppSto
     var profile = await RequireUserAsync(http, config, store);
     if (profile is null) return Results.Unauthorized();
 
-    var now = DateTimeOffset.UtcNow;
-    var cards = (await store.GetDeckAsync(profile.Id)).Cards
-        .Where(card => !card.IsArchived)
-        .Where(card => LeitnerSchedule.IsDue(card, now))
-        .OrderBy(card => card.NextReviewAt)
-        .ThenBy(card => card.Box)
-        .Take(25)
-        .ToList();
+    var cards = await store.GetDueCardsAsync(profile.Id, 25);
 
     return Results.Ok(cards.Select(FeedbackCardPresenter.ToReviewShape));
 });
 
-api.MapGet("/cards", async (HttpContext http, IConfiguration config, IAppStore store, bool archived = false) =>
+api.MapGet("/cards", async (HttpContext http, IConfiguration config, IAppStore store, bool archived = false, int limit = 30, string? cursor = null, int[]? boxes = null) =>
 {
     var profile = await RequireUserAsync(http, config, store);
     if (profile is null) return Results.Unauthorized();
 
-    var deck = await store.GetDeckAsync(profile.Id);
-    return Results.Ok(deck.Cards
-        .Where(card => card.IsArchived == archived)
-        .OrderByDescending(card => card.CreatedAt)
-        .Select(FeedbackCardPresenter.ToReviewShape));
+    var page = await store.GetCardsPageAsync(profile.Id, archived, limit, cursor, boxes);
+    return Results.Ok(new
+    {
+        items = page.Items.Select(FeedbackCardPresenter.ToReviewShape),
+        page.NextCursor,
+        page.HasMore
+    });
 });
 
 api.MapPost("/cards", async (HttpContext http, IConfiguration config, CreateCardRequest request, IAppStore store) =>
@@ -179,15 +174,15 @@ api.MapPost("/cards", async (HttpContext http, IConfiguration config, CreateCard
         return Results.BadRequest(new { message = "روی کارت و پشت کارت را کامل وارد کنید." });
     }
 
-    var deck = await store.GetDeckAsync(profile.Id);
     if (request.ClientId is { } clientId)
     {
-        var existing = deck.Cards.FirstOrDefault(card => card.Id == clientId);
+        var existing = await store.GetCardAsync(profile.Id, clientId);
         if (existing is not null) return Results.Ok(FeedbackCardPresenter.ToReviewShape(existing));
     }
 
     var plan = await store.GetEffectivePlanAsync(profile.Plan);
-    if (!profile.Features.UnlimitedCards && plan.CardLimit > -1 && deck.Cards.Count(card => !card.IsArchived) >= plan.CardLimit)
+    var summary = await store.GetDeckSummaryAsync(profile.Id);
+    if (!profile.Features.UnlimitedCards && plan.CardLimit > -1 && summary.ActiveCards >= plan.CardLimit)
     {
         return Results.BadRequest(new { message = "سقف تعداد کارت‌های این پلن پر شده است." });
     }
@@ -380,8 +375,9 @@ api.MapGet("/packages", async (HttpContext http, IConfiguration config, IAppStor
     if (profile is null) return Results.Unauthorized();
 
     var packages = (await store.GetPackagesAsync()).Where(package => package.IsPublished).ToList();
-    var deck = await store.GetDeckAsync(profile.Id);
-    return Results.Ok(packages.Select(package => PackageSummary(package, deck, profile.Plan)));
+    var progress = (await store.GetPackageProgressAsync(profile.Id))
+        .ToDictionary(item => item.PackageId, item => item.AddedCards, StringComparer.OrdinalIgnoreCase);
+    return Results.Ok(packages.Select(package => PackageSummary(package, progress.GetValueOrDefault(package.Id), profile.Plan)));
 });
 
 api.MapPost("/packages/{id}/import", async (HttpContext http, IConfiguration config, string id, PackageImportRequest request, IAppStore store) =>
@@ -795,34 +791,13 @@ admin.MapPost("/broadcast", async (HttpContext http, IConfiguration config, Admi
         return Results.BadRequest(new { message = "متن پیام را وارد کن." });
     }
 
-    var users = ApplyBroadcastFilter(await store.GetUsersAsync(), request).ToList();
-    var settings = await store.GetSettingsAsync();
-    var sent = 0;
-    var skipped = 0;
-    var failed = 0;
-    var errors = new List<string>();
+    return Results.Accepted($"/api/admin/broadcast/jobs", await store.QueueBroadcastAsync(request));
+});
 
-    foreach (var user in users)
-    {
-        if (!user.TelegramChatId.HasValue)
-        {
-            skipped++;
-            continue;
-        }
-
-        try
-        {
-            await bot.SendAdminMessageAsync(user, request.Message.Trim(), settings);
-            sent++;
-        }
-        catch (Exception ex)
-        {
-            failed++;
-            errors.Add($"{user.Id}: {ex.Message}");
-        }
-    }
-
-    return Results.Ok(new AdminBroadcastResult(users.Count, sent, skipped, failed, errors.Take(20).ToList()));
+admin.MapGet("/broadcast/jobs", async (HttpContext http, IConfiguration config, IAppStore store, int limit = 20) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    return Results.Ok(await store.GetBroadcastJobsAsync(limit));
 });
 
 app.Run();
@@ -858,55 +833,6 @@ static bool IsAdmin(HttpContext http, IConfiguration config)
     var actual = http.Request.Headers["X-Admin-Token"].FirstOrDefault();
     return !string.IsNullOrWhiteSpace(actual)
         && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(actual), Encoding.UTF8.GetBytes(expected));
-}
-
-static IEnumerable<UserProfile> ApplyBroadcastFilter(IEnumerable<UserProfile> users, AdminBroadcastRequest request)
-{
-    var query = users;
-    if (request.Audience.Equals("all", StringComparison.OrdinalIgnoreCase))
-    {
-        return query.OrderByDescending(user => user.LastSeenAt);
-    }
-
-    if (request.Audience.Equals("selected", StringComparison.OrdinalIgnoreCase))
-    {
-        var ids = (request.UserIds ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return query
-            .Where(user => ids.Contains(user.Id))
-            .OrderByDescending(user => user.LastSeenAt);
-    }
-
-    if (!string.IsNullOrWhiteSpace(request.Plan))
-    {
-        query = query.Where(user => user.Plan.Equals(request.Plan.Trim(), StringComparison.OrdinalIgnoreCase));
-    }
-
-    if (request.IsActive.HasValue)
-    {
-        query = query.Where(user => user.IsActive == request.IsActive.Value);
-    }
-
-    if (!string.IsNullOrWhiteSpace(request.Source))
-    {
-        query = query.Where(user => user.Source.Equals(request.Source.Trim(), StringComparison.OrdinalIgnoreCase));
-    }
-
-    if (!string.IsNullOrWhiteSpace(request.AccessCode))
-    {
-        query = query.Where(user => user.AccessCode.Equals(request.AccessCode.Trim(), StringComparison.OrdinalIgnoreCase));
-    }
-
-    if (!string.IsNullOrWhiteSpace(request.Search))
-    {
-        var search = request.Search.Trim();
-        query = query.Where(user =>
-            user.Id.Contains(search, StringComparison.OrdinalIgnoreCase)
-            || user.DisplayName.Contains(search, StringComparison.OrdinalIgnoreCase)
-            || user.TelegramId.Contains(search, StringComparison.OrdinalIgnoreCase)
-            || user.TelegramUsername.Contains(search, StringComparison.OrdinalIgnoreCase));
-    }
-
-    return query.OrderByDescending(user => user.LastSeenAt);
 }
 
 static async Task NotifyPlanChangedAsync(UserProfile profile, string previousPlan, IAppStore store, TelegramBotService bot)
@@ -955,16 +881,8 @@ static List<string> EnabledFeatureLabels(FeatureSet features)
     return labels;
 }
 
-static object PackageSummary(LearningPackage package, DeckState deck, string planName)
+static object PackageSummary(LearningPackage package, int addedCards, string planName)
 {
-    var existingPackageCards = deck.Cards
-        .Where(card => card.SourcePackageId.Equals(package.Id, StringComparison.OrdinalIgnoreCase))
-        .Select(card => card.SourcePackageCardId)
-        .ToHashSet(StringComparer.OrdinalIgnoreCase);
-    var existingSignatures = deck.Cards.Select(FlashCardSignature).ToHashSet(StringComparer.OrdinalIgnoreCase);
-    var available = package.Cards.Count(card =>
-        !existingPackageCards.Contains(card.Id)
-        && !existingSignatures.Contains(PackageCardSignature(card)));
     var hasAccess = HasPackageAccess(package, planName);
 
     return new
@@ -976,8 +894,8 @@ static object PackageSummary(LearningPackage package, DeckState deck, string pla
         package.IsPublished,
         package.SortOrder,
         TotalCards = package.Cards.Count,
-        AddedCards = package.Cards.Count - package.Cards.Count(card => !existingPackageCards.Contains(card.Id)),
-        AvailableCards = Math.Max(0, available),
+        AddedCards = addedCards,
+        AvailableCards = Math.Max(0, package.Cards.Count - addedCards),
         HasAccess = hasAccess,
         AccessMessage = hasAccess ? string.Empty : "پلن شما به این بسته دسترسی ندارد."
     };
@@ -1014,9 +932,6 @@ static bool HasPackageAccess(LearningPackage package, string planName) =>
     package.RequiredPlans.Count == 0
     || package.RequiredPlans.Any(plan => plan.Equals(planName, StringComparison.OrdinalIgnoreCase) || NormalizePlanId(plan) == NormalizePlanId(planName));
 
-static string PackageCardSignature(PackageCard card) => $"{card.Type}:{NormalizeText(card.Front)}";
-static string FlashCardSignature(FlashCard card) => $"{card.Type}:{NormalizeText(card.Front)}";
-static string NormalizeText(string value) => new((value ?? string.Empty).Trim().ToLowerInvariant().Where(ch => !char.IsWhiteSpace(ch)).ToArray());
 static string NormalizePlanId(string value)
 {
     var normalized = new string((value ?? string.Empty).Trim().ToLowerInvariant()
