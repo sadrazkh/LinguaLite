@@ -87,6 +87,25 @@ OPENROUTER_MODEL=google/gemma-4-31b-it:free
 OPENROUTER_REFERER=https://YOUR_DOMAIN
 ```
 
+## Admin backup and bot control
+
+Open `/admin`, enter `ADMIN_TOKEN`, then use the `Backup` tab to set the private
+Telegram `chat_id` of the administrator and an interval from 1 to 168 hours.
+The worker creates a PostgreSQL custom dump with `pg_dump` (or copies the local
+JSON database in Development) and sends the document to that chat.
+
+- The production Docker image installs `postgresql-client`, which provides
+  `pg_dump` and `pg_restore`.
+- Telegram documents are limited to 49 MB by this app. A backup larger than that
+  is not silently truncated; its failure is recorded in the panel and reported
+  to the configured admin chat. Use object storage for large production dumps.
+- Restoring requires a `.dump` PostgreSQL backup (or `.json` local backup) and
+  the exact confirmation text `RESTORE`. A safety backup is created first.
+  Restore should be done during a low-traffic maintenance window.
+- Only the configured admin Telegram chat can use: `/admin report`,
+  `/admin user <id>`, `/admin plan <id> <plan>`,
+  `/admin message <id> <text>`, and `/admin broadcast <text>`.
+
 برای OpenRouter یک کلید یا چند کلید می‌توانی بدهی:
 
 ```text

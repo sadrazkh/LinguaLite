@@ -22,6 +22,16 @@ const elements = {
   setWebhookButton: $("#setWebhookButton"),
   botStatusButton: $("#botStatusButton"),
   botStatusPanel: $("#botStatusPanel"),
+  backupAdminPanel: $("#backupAdminPanel"),
+  backupSettingsForm: $("#backupSettingsForm"),
+  adminTelegramChatIdInput: $("#adminTelegramChatIdInput"),
+  backupIntervalHoursInput: $("#backupIntervalHoursInput"),
+  runBackupButton: $("#runBackupButton"),
+  backupStatusPanel: $("#backupStatusPanel"),
+  restoreBackupForm: $("#restoreBackupForm"),
+  restoreBackupFileInput: $("#restoreBackupFileInput"),
+  restoreConfirmInput: $("#restoreConfirmInput"),
+  restoreBackupButton: $("#restoreBackupButton"),
   newPlanNameInput: $("#newPlanNameInput"),
   addPlanButton: $("#addPlanButton"),
   plansBoard: $("#plansBoard"),
@@ -68,10 +78,11 @@ const elements = {
   toast: $("#toast")
 };
 
-let state = { users: [], metrics: [], plans: [], packages: [], codes: [], codeUsage: [], broadcastJobs: [], settings: null, draggingPlanId: null, usersPage: 1, usersPageSize: 10 };
+let state = { users: [], metrics: [], plans: [], packages: [], codes: [], codeUsage: [], broadcastJobs: [], backupStatus: null, settings: null, draggingPlanId: null, usersPage: 1, usersPageSize: 10 };
 const selectedBroadcastUserIds = new Set();
 const adminTabs = [
   { id: "settings", label: "تنظیمات", count: () => "", panel: () => elements.settingsForm.closest(".panel") },
+  { id: "backup", label: "بکاپ", count: () => "", panel: () => elements.backupAdminPanel },
   { id: "plans", label: "پلن‌ها", count: () => state.plans.length, panel: () => elements.plansBoard.closest(".panel") },
   { id: "packages", label: "بسته‌ها", count: () => state.packages.length, panel: () => elements.packageForm.closest(".panel") },
   { id: "broadcast", label: "پیام‌رسانی", count: () => filterBroadcastUsers().length, panel: () => elements.broadcastMessageInput.closest(".panel") },
@@ -84,6 +95,9 @@ elements.logoutButton.addEventListener("click", logout);
 elements.settingsForm.addEventListener("submit", saveSettings);
 elements.setWebhookButton.addEventListener("click", setWebhook);
 elements.botStatusButton.addEventListener("click", loadBotStatus);
+elements.backupSettingsForm.addEventListener("submit", saveBackupSettings);
+elements.runBackupButton.addEventListener("click", runBackupNow);
+elements.restoreBackupForm.addEventListener("submit", restoreBackup);
 elements.addPlanButton.addEventListener("click", addPlan);
 elements.packageForm.addEventListener("submit", savePackage);
 elements.newPackageButton.addEventListener("click", resetPackageForm);
@@ -118,7 +132,7 @@ async function adminLogin(event) {
 
 async function loadAll() {
   setStatus("در حال بارگذاری...", "");
-  const [users, metrics, codes, codeUsage, plans, packages, settingsPayload, broadcastJobs] = await Promise.all([
+  const [users, metrics, codes, codeUsage, plans, packages, settingsPayload, broadcastJobs, backupStatus] = await Promise.all([
     adminFetch("/api/admin/users"),
     adminFetch("/api/admin/user-metrics"),
     adminFetch("/api/admin/codes"),
@@ -126,9 +140,10 @@ async function loadAll() {
     adminFetch("/api/admin/plans"),
     adminFetch("/api/admin/packages"),
     adminFetch("/api/admin/settings"),
-    adminFetch("/api/admin/broadcast/jobs")
+    adminFetch("/api/admin/broadcast/jobs"),
+    adminFetch("/api/admin/backup/status")
   ]);
-  state = { ...state, users, metrics, codes, codeUsage, plans, packages, broadcastJobs, settings: settingsPayload.settings };
+  state = { ...state, users, metrics, codes, codeUsage, plans, packages, broadcastJobs, backupStatus, settings: settingsPayload.settings };
   state.usersPage = Math.min(state.usersPage, getUsersPageCount());
   elements.dashboard.hidden = false;
   elements.logoutButton.hidden = false;
@@ -136,6 +151,7 @@ async function loadAll() {
   setStatus("ادمین تایید شد.", "ok");
   renderStats();
   renderSettings(settingsPayload);
+  renderBackupStatus(backupStatus);
   renderPlans();
   renderPackages();
   renderUsers();
@@ -387,6 +403,81 @@ async function saveSettings(event) {
   });
   showToast("تنظیمات ذخیره شد.");
   await loadAll();
+}
+
+async function saveBackupSettings(event) {
+  event.preventDefault();
+  const rawChatId = elements.adminTelegramChatIdInput.value.trim();
+  if (rawChatId && !/^\d+$/.test(rawChatId)) {
+    showToast("Telegram Chat ID باید فقط عدد باشد.");
+    return;
+  }
+  await adminFetch("/api/admin/backup/settings", {
+    method: "PUT",
+    body: JSON.stringify({
+      adminTelegramChatId: rawChatId ? Number(rawChatId) : null,
+      backupIntervalHours: Number(elements.backupIntervalHoursInput.value || 24)
+    })
+  });
+  showToast("تنظیمات بکاپ ذخیره شد.");
+  await loadAll();
+}
+
+async function runBackupNow() {
+  setButtonLoading(elements.runBackupButton, true, "در حال بکاپ...");
+  try {
+    const result = await adminFetch("/api/admin/backup/run", { method: "POST" });
+    showToast(`بکاپ ${result.fileName} به تلگرام ارسال شد.`);
+    await loadAll();
+  } catch (error) {
+    showToast(error.message || "بکاپ ارسال نشد.");
+    await loadAll().catch(() => {});
+  } finally {
+    setButtonLoading(elements.runBackupButton, false, "ساخت و ارسال بکاپ اکنون");
+  }
+}
+
+async function restoreBackup(event) {
+  event.preventDefault();
+  const file = elements.restoreBackupFileInput.files?.[0];
+  if (!file) return showToast("فایل بکاپ را انتخاب کن.");
+  if (elements.restoreConfirmInput.value.trim() !== "RESTORE") {
+    return showToast("برای ریستور عبارت RESTORE را دقیق وارد کن.");
+  }
+  if (!confirm("ریستور دیتابیس اطلاعات فعلی را جایگزین می‌کند. ادامه می‌دهی؟")) return;
+
+  const form = new FormData();
+  form.append("backup", file);
+  form.append("confirm", "RESTORE");
+  setButtonLoading(elements.restoreBackupButton, true, "در حال ریستور...");
+  try {
+    const result = await adminUpload("/api/admin/backup/restore", form);
+    showToast(result.message || "ریستور کامل شد.");
+    elements.restoreBackupForm.reset();
+    await loadAll();
+  } catch (error) {
+    showToast(error.message || "ریستور ناموفق بود.");
+  } finally {
+    setButtonLoading(elements.restoreBackupButton, false, "ریستور بکاپ");
+  }
+}
+
+function renderBackupStatus(status) {
+  if (!status) return;
+  elements.adminTelegramChatIdInput.value = status.adminTelegramChatId || "";
+  elements.backupIntervalHoursInput.value = status.backupIntervalHours || 24;
+  elements.backupStatusPanel.hidden = false;
+  const configured = Boolean(status.adminTelegramChatId);
+  elements.backupStatusPanel.innerHTML = `
+    <div class="bot-status-grid">
+      <span class="${configured ? "ok-text" : "warning-text"}"><b>چت ادمین</b>${configured ? escapeHtml(status.adminTelegramChatId) : "تنظیم نشده"}</span>
+      <span><b>ذخیره‌سازی</b>${escapeHtml(status.provider || "-")}</span>
+      <span><b>آخرین بکاپ موفق</b>${escapeHtml(formatAdminDate(status.lastBackupAt))}</span>
+      <span><b>آخرین تلاش</b>${escapeHtml(formatAdminDate(status.lastBackupAttemptAt))}</span>
+      <span><b>وضعیت</b>${escapeHtml(status.lastBackupStatus || "هنوز بکاپی اجرا نشده")}</span>
+      <span><b>سقف ارسال تلگرام</b>${escapeHtml(formatBytes(status.telegramDocumentLimitBytes))}</span>
+    </div>
+  `;
 }
 
 async function setWebhook() {
@@ -916,6 +1007,17 @@ async function adminFetch(url, options = {}) {
   return response.status === 204 ? null : response.json();
 }
 
+async function adminUpload(url, formData) {
+  const headers = new Headers();
+  headers.set("X-Admin-Token", localStorage.getItem(storage.token) || "");
+  const response = await fetch(url, { method: "POST", headers, body: formData });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.message || "عملیات ادمین ناموفق بود.");
+  }
+  return response.json();
+}
+
 function logout(message = "خارج شدی.") {
   localStorage.removeItem(storage.token);
   elements.dashboard.hidden = true;
@@ -993,6 +1095,12 @@ function formatAdminDate(value) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!bytes) return "-";
+  return bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function safeColor(value, fallback) {

@@ -152,6 +152,11 @@ public sealed class AppSettingsState
     public bool BotEnabled { get; set; } = true;
     public bool RemindersEnabled { get; set; } = true;
     public int ReminderHour { get; set; } = 9;
+    public long? AdminTelegramChatId { get; set; }
+    public int BackupIntervalHours { get; set; } = 24;
+    public DateTimeOffset? LastBackupAt { get; set; }
+    public DateTimeOffset? LastBackupAttemptAt { get; set; }
+    public string LastBackupStatus { get; set; } = string.Empty;
 }
 
 public sealed class AccessCode
@@ -430,6 +435,7 @@ public sealed record AdminBroadcastResult(int Matched, int Sent, int Skipped, in
 public sealed record UpdateCardRequest(string Front, string Back, string? Example, string? Prompt, string? Answer, string? Notes, CardType Type = CardType.Word);
 public sealed record UpsertPlanRequest(string Id, string Name, string? BadgeColor, string? BadgeTextColor, FeatureSet Features, int AiDailyLimit, int AiMonthlyLimit, int DictionaryDailyLimit, int DictionaryMonthlyLimit, int CorrectionDailyLimit, int CorrectionMonthlyLimit, int CardLimit, int SortOrder, bool IsDefault);
 public sealed record UpdateSettingsRequest(string? OpenRouterModel, string? OpenRouterReferer, string? PublicBaseUrl, string? TelegramBotUsername, string? TelegramMiniAppUrl, bool? BotEnabled, bool? RemindersEnabled, int? ReminderHour);
+public sealed record UpdateAdminBackupSettingsRequest(long? AdminTelegramChatId, int BackupIntervalHours);
 public sealed record TelegramWebhookRequest(JsonElement Update);
 public sealed record RedeemResult(bool Success, string Message, UserProfile? Profile)
 {

@@ -21,6 +21,14 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
         var displayName = $"{firstName} {lastName}".Trim();
         if (string.IsNullOrWhiteSpace(displayName)) displayName = username;
 
+        var command = text.Trim();
+        if (settings.AdminTelegramChatId == chatId
+            && command.StartsWith("/admin", StringComparison.OrdinalIgnoreCase))
+        {
+            await HandleAdminCommandAsync(chatId, command, settings);
+            return;
+        }
+
         var profile = await store.GetOrCreateUserAsync(new UserIdentity(
             $"tg_{telegramId}",
             "telegram-bot",
@@ -30,7 +38,6 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
             username,
             chatId));
 
-        var command = text.Trim();
         if (command.StartsWith("/start login", StringComparison.OrdinalIgnoreCase)
             || command.StartsWith("/start=login", StringComparison.OrdinalIgnoreCase)
             || command.StartsWith("/login", StringComparison.OrdinalIgnoreCase))
@@ -168,6 +175,147 @@ public sealed class TelegramBotService(HttpClient httpClient, IConfiguration con
         }
         await SendMessageAsync(user.TelegramChatId.Value, text, settings);
     }
+
+    public async Task SendAdminTextAsync(long chatId, string text, AppSettingsState settings)
+    {
+        if (string.IsNullOrWhiteSpace(configuration["TELEGRAM_BOT_TOKEN"]))
+        {
+            throw new InvalidOperationException("TELEGRAM_BOT_TOKEN تنظیم نشده است.");
+        }
+        await SendMessageAsync(chatId, text, settings);
+    }
+
+    public async Task SendAdminDocumentAsync(long chatId, string filePath, string caption, CancellationToken cancellationToken = default)
+    {
+        var token = configuration["TELEGRAM_BOT_TOKEN"];
+        if (string.IsNullOrWhiteSpace(token)) throw new InvalidOperationException("TELEGRAM_BOT_TOKEN تنظیم نشده است.");
+        if (!File.Exists(filePath)) throw new FileNotFoundException("فایل بکاپ برای ارسال پیدا نشد.", filePath);
+
+        await using var stream = File.OpenRead(filePath);
+        using var content = new MultipartFormDataContent();
+        using var document = new StreamContent(stream);
+        content.Add(new StringContent(chatId.ToString()), "chat_id");
+        content.Add(new StringContent(caption), "caption");
+        content.Add(document, "document", Path.GetFileName(filePath));
+
+        using var response = await httpClient.PostAsync($"https://api.telegram.org/bot{token}/sendDocument", content, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode || !IsTelegramOk(body))
+        {
+            throw new InvalidOperationException($"Telegram sendDocument failed: {TelegramDescription(body)}");
+        }
+    }
+
+    private async Task HandleAdminCommandAsync(long chatId, string command, AppSettingsState settings)
+    {
+        var parts = command.Split(' ', 4, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var action = parts.Length > 1 ? parts[1].ToLowerInvariant() : "report";
+
+        if (action is "help" or "?")
+        {
+            await SendMessageAsync(chatId, """
+                فرمان‌های ادمین:
+                /admin report
+                /admin user <telegram-id | user-id>
+                /admin plan <telegram-id | user-id> <plan>
+                /admin message <telegram-id | user-id> <text>
+                /admin broadcast <text>
+                """, settings);
+            return;
+        }
+
+        if (action is "report" or "stats")
+        {
+            var users = await store.GetUsersAsync();
+            var metrics = await store.GetAdminUserMetricsAsync();
+            var active = users.Count(user => user.IsActive);
+            var telegramConnected = users.Count(user => user.TelegramChatId.HasValue);
+            var cards = metrics.Sum(metric => metric.TotalCards);
+            var due = metrics.Sum(metric => metric.DueCards);
+            await SendMessageAsync(chatId,
+                $"گزارش LinguaLite\nکاربران: {users.Count}\nفعال: {active}\nمتصل به ربات: {telegramConnected}\nکارت‌ها: {cards}\nموعد مرور: {due}",
+                settings);
+            return;
+        }
+
+        if (action == "broadcast")
+        {
+            var message = parts.Length >= 3 ? command.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)[2] : string.Empty;
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                await SendMessageAsync(chatId, "فرمت: /admin broadcast متن پیام", settings);
+                return;
+            }
+
+            var job = await store.QueueBroadcastAsync(new AdminBroadcastRequest(message, "all"));
+            await SendMessageAsync(chatId, $"صف ارسال همگانی ساخته شد. Job: {job.Id}", settings);
+            return;
+        }
+
+        if (parts.Length < 3)
+        {
+            await SendMessageAsync(chatId, "شناسه کاربر را وارد کن. برای راهنما: /admin help", settings);
+            return;
+        }
+
+        var usersList = await store.GetUsersAsync();
+        var target = FindAdminTarget(usersList, parts[2]);
+        if (target is null)
+        {
+            await SendMessageAsync(chatId, "کاربر با این شناسه پیدا نشد.", settings);
+            return;
+        }
+
+        if (action == "user")
+        {
+            await SendMessageAsync(chatId,
+                $"کاربر: {target.DisplayName}\nID: {target.Id}\nTelegram: {target.TelegramId}\nPlan: {target.Plan}\nActive: {target.IsActive}\nLast seen: {target.LastSeenAt:yyyy-MM-dd HH:mm} UTC",
+                settings);
+            return;
+        }
+
+        if (action == "message")
+        {
+            var message = parts.Length >= 4 ? parts[3] : string.Empty;
+            if (string.IsNullOrWhiteSpace(message) || !target.TelegramChatId.HasValue)
+            {
+                await SendMessageAsync(chatId, "فرمت: /admin message <id> <text>؛ کاربر باید ربات را شروع کرده باشد.", settings);
+                return;
+            }
+            await SendMessageAsync(target.TelegramChatId.Value, message, settings);
+            await SendMessageAsync(chatId, "پیام ارسال شد.", settings);
+            return;
+        }
+
+        if (action == "plan")
+        {
+            var planName = parts.Length >= 4 ? parts[3] : string.Empty;
+            if (string.IsNullOrWhiteSpace(planName))
+            {
+                await SendMessageAsync(chatId, "فرمت: /admin plan <id> <plan>", settings);
+                return;
+            }
+            var effectivePlan = await store.GetEffectivePlanAsync(planName);
+            var updated = await store.UpdateUserAsync(target.Id, user =>
+            {
+                user.Plan = effectivePlan.Name;
+                user.Features = effectivePlan.Features;
+            });
+            if (updated is not null && updated.TelegramChatId.HasValue)
+            {
+                await SendMessageAsync(updated.TelegramChatId.Value, PlanActivationText(updated, effectivePlan), settings);
+            }
+            await SendMessageAsync(chatId, $"پلن {target.DisplayName} به {effectivePlan.Name} تغییر کرد.", settings);
+            return;
+        }
+
+        await SendMessageAsync(chatId, "فرمان ناشناخته است. /admin help", settings);
+    }
+
+    private static UserProfile? FindAdminTarget(IEnumerable<UserProfile> users, string value) => users.FirstOrDefault(user =>
+        user.Id.Equals(value, StringComparison.OrdinalIgnoreCase)
+        || user.TelegramId.Equals(value, StringComparison.OrdinalIgnoreCase)
+        || (user.TelegramChatId?.ToString() ?? string.Empty).Equals(value, StringComparison.OrdinalIgnoreCase));
 
     private static string StartText(UserProfile profile) =>
         $"سلام {profile.DisplayName}!\nاکانتت به LinguaLite وصل شد و کارت‌ها با همین شناسه تلگرام ذخیره می‌شوند.\nبرای ورود به نسخه مرورگر یا PWA دستور /login را بزن.";

@@ -13,6 +13,8 @@ builder.Services.ConfigureHttpJsonOptions(options =>
     options.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
     options.SerializerOptions.Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
 });
+builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
+    options.MultipartBodyLengthLimit = 1024L * 1024 * 1024);
 
 if (builder.Environment.IsDevelopment() && !PostgresAppStore.HasConnectionString(builder.Configuration))
 {
@@ -25,8 +27,11 @@ else
 
 builder.Services.AddHttpClient<OpenRouterCardService>();
 builder.Services.AddHttpClient<TelegramBotService>();
+builder.Services.AddScoped<DatabaseBackupService>();
+builder.Services.AddScoped<DatabaseBackupDeliveryService>();
 builder.Services.AddHostedService<ReminderWorker>();
 builder.Services.AddHostedService<BroadcastWorker>();
+builder.Services.AddHostedService<BackupWorker>();
 
 var app = builder.Build();
 
@@ -750,6 +755,87 @@ admin.MapPut("/settings", async (HttpContext http, IConfiguration config, Update
     });
 
     return Results.Ok(settings);
+});
+
+admin.MapGet("/backup/status", async (HttpContext http, IConfiguration config, IAppStore store) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    var settings = await store.GetSettingsAsync();
+    return Results.Ok(new
+    {
+        provider = store.ProviderName,
+        adminTelegramChatId = settings.AdminTelegramChatId,
+        backupIntervalHours = Math.Clamp(settings.BackupIntervalHours, 1, 168),
+        settings.LastBackupAt,
+        settings.LastBackupAttemptAt,
+        settings.LastBackupStatus,
+        telegramDocumentLimitBytes = DatabaseBackupDeliveryService.TelegramDocumentLimitBytes,
+        restoreLimitBytes = 1024L * 1024 * 1024
+    });
+});
+
+admin.MapPut("/backup/settings", async (HttpContext http, IConfiguration config, UpdateAdminBackupSettingsRequest request, IAppStore store) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    if (request.AdminTelegramChatId.HasValue && request.AdminTelegramChatId.Value <= 0)
+    {
+        return Results.BadRequest(new { message = "Telegram Chat ID باید یک عدد مثبت باشد." });
+    }
+
+    var settings = await store.UpdateSettingsAsync(current =>
+    {
+        current.AdminTelegramChatId = request.AdminTelegramChatId;
+        current.BackupIntervalHours = Math.Clamp(request.BackupIntervalHours, 1, 168);
+    });
+    return Results.Ok(settings);
+});
+
+admin.MapPost("/backup/run", async (HttpContext http, IConfiguration config, DatabaseBackupDeliveryService delivery) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    try
+    {
+        var artifact = await delivery.RunNowAsync(http.RequestAborted);
+        return Results.Ok(new { artifact.FileName, artifact.SizeBytes, artifact.CreatedAt, artifact.Provider });
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
+});
+
+admin.MapPost("/backup/restore", async (HttpContext http, IConfiguration config, IFormFile backup, string? confirm, DatabaseBackupService backupService, IAppStore store, TelegramBotService bot) =>
+{
+    if (!IsAdmin(http, config)) return Results.Unauthorized();
+    if (!string.Equals(confirm, "RESTORE", StringComparison.Ordinal))
+    {
+        return Results.BadRequest(new { message = "برای ریستور باید عبارت RESTORE را دقیق وارد کنی." });
+    }
+
+    try
+    {
+        var safetyBackup = await backupService.RestoreAsync(backup, http.RequestAborted);
+        await store.EnsureReadyAsync();
+        var settings = await store.UpdateSettingsAsync(current =>
+            current.LastBackupStatus = $"ریستور کامل شد. بکاپ ایمنی: {safetyBackup.FileName}");
+
+        if (settings.AdminTelegramChatId.HasValue)
+        {
+            try
+            {
+                await bot.SendAdminTextAsync(settings.AdminTelegramChatId.Value, $"ریستور دیتابیس LinguaLite کامل شد. بکاپ ایمنی: {safetyBackup.FileName}", settings);
+            }
+            catch
+            {
+                // Restoring data is already complete even if Telegram is unavailable.
+            }
+        }
+        return Results.Ok(new { message = "ریستور کامل شد.", safetyBackup.FileName, safetyBackup.SizeBytes });
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { message = ex.Message });
+    }
 });
 
 admin.MapPost("/bot/set-webhook", async (HttpContext http, IConfiguration config, IAppStore store, TelegramBotService bot) =>

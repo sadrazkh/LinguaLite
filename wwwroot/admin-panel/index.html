@@ -64,6 +64,29 @@
         <div class="bot-status-panel" id="botStatusPanel" hidden></div>
       </section>
 
+      <section class="panel" id="backupAdminPanel">
+        <div class="panel-title">
+          <strong>بکاپ و ربات ادمین</strong>
+          <span>فقط همین Telegram Chat ID می‌تواند فرمان‌های مدیریتی ربات را اجرا کند. بکاپ PostgreSQL با فرمت قابل ریستور ساخته و طبق فاصلهٔ انتخابی به همین چت ارسال می‌شود.</span>
+        </div>
+        <form class="settings-grid" id="backupSettingsForm">
+          <label><span>Telegram Chat ID ادمین</span><input id="adminTelegramChatIdInput" inputmode="numeric" placeholder="مثال: 123456789"></label>
+          <label><span>فاصلهٔ بکاپ (ساعت)</span><input id="backupIntervalHoursInput" type="number" min="1" max="168" value="24"></label>
+          <button class="primary-button" type="submit">ذخیرهٔ بکاپ</button>
+          <button class="secondary-button" id="runBackupButton" type="button">ساخت و ارسال بکاپ اکنون</button>
+        </form>
+        <div class="bot-status-panel backup-status-panel" id="backupStatusPanel" hidden></div>
+        <div class="backup-command-help">
+          <strong>فرمان‌های مجاز در چت ادمین</strong>
+          <code>/admin report</code><code>/admin user &lt;id&gt;</code><code>/admin plan &lt;id&gt; &lt;plan&gt;</code><code>/admin message &lt;id&gt; &lt;text&gt;</code><code>/admin broadcast &lt;text&gt;</code>
+        </div>
+        <form class="restore-form" id="restoreBackupForm">
+          <label><span>فایل بکاپ برای ریستور</span><input id="restoreBackupFileInput" type="file" accept=".dump,.backup,.json" required></label>
+          <label><span>تأیید عملیات</span><input id="restoreConfirmInput" autocomplete="off" placeholder="RESTORE" required></label>
+          <button class="danger-button" id="restoreBackupButton" type="submit">ریستور بکاپ</button>
+        </form>
+      </section>
+
       <section class="panel">
         <div class="panel-title">
           <strong>پلن‌ها و دسترسی‌ها</strong>

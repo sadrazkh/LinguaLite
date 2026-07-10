@@ -2260,7 +2260,7 @@ public sealed class PostgresAppStore(IConfiguration configuration) : IAppStore, 
         return !string.IsNullOrWhiteSpace(ReadConnectionString(config));
     }
 
-    private static string GetConnectionString(IConfiguration config)
+    public static string GetConnectionString(IConfiguration config)
     {
         var raw = ReadConnectionString(config);
 

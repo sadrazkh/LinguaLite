@@ -18,6 +18,8 @@ public sealed class LocalFileAppStore(IWebHostEnvironment environment, IConfigur
         }
     }
 
+    public string GetDatabasePath() => DatabasePath;
+
     public async Task EnsureReadyAsync()
     {
         await MutateAsync(db => db);

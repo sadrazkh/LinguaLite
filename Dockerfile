@@ -10,6 +10,9 @@ RUN dotnet publish ./LinguaLite.csproj -c Release -o /app/publish /p:UseAppHost=
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
 
+# pg_dump and pg_restore keep PostgreSQL backups portable and restorable from the admin panel.
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client && rm -rf /var/lib/apt/lists/*
+
 ENV ASPNETCORE_URLS=http://+:80
 ENV OPENROUTER_MODEL=google/gemma-4-31b-it:free
 
